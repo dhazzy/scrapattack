@@ -26,12 +26,6 @@ COMPARE_INTERVAL_SEC=300
 ALERT_DISPATCH_INTERVAL_SEC=30
 ```
 
-This means:
-- ps3838 scrape every 5 min
-- e-stave scrape every 5 min
-- value comparison every 5 min
-- alert dispatch every 30 sec
-
 ## Why canonical IDs matter
 
 `ps3838` and `e-stave` use different external event IDs.  
@@ -55,10 +49,28 @@ SCRAPER_ENABLE_PLAYWRIGHT=false
 
 ### Source notes
 
-- `e-stave`: scraper now uses the live mobile endpoint (`_MobileService.aspx`) and parses soccer events/odds.
-- `ps3838`: may return Cloudflare 403 from some server IPs. In that case no live quotes are returned (no mock fallback in live mode).
+- `e-stave`: scraper uses live mobile endpoint (`_MobileService.aspx`) and parses soccer events/odds.
+- `ps3838`: often Cloudflare-protected. Scraper has bypass options (proxy + cookie + stealth browser retries).
 
-If Playwright mode is enabled, install browser binaries:
+## PS3838 bypass options
+
+Set in `.env`:
+
+```env
+PS3838_PROXY_URL=http://username:password@proxy-host:proxy-port
+PS3838_COOKIE_HEADER=cf_clearance=...; session=...
+PS3838_BROWSER_ONLY=false
+PS3838_ENABLE_STEALTH=true
+PS3838_RETRY_COUNT=2
+SCRAPER_ENABLE_PLAYWRIGHT=true
+```
+
+Notes:
+- If your host IP is blocked, you usually need a **residential proxy**.
+- Cookie header should come from a valid browser session.
+- Browser mode may still fail without good IP/session reputation.
+
+Install browser binaries for Playwright:
 
 ```bash
 python -m playwright install chromium

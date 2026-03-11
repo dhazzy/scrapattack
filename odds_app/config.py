@@ -24,12 +24,20 @@ class Settings(BaseSettings):
     ps3838_soccer_url: str = Field(
         default="https://www.ps3838.com/en/sports/soccer", alias="PS3838_SOCCER_URL"
     )
+    ps3838_referer_url: str = Field(default="https://www.ps3838.com/", alias="PS3838_REFERER_URL")
+    ps3838_cookie_header: str = Field(default="", alias="PS3838_COOKIE_HEADER")
+    ps3838_proxy_url: str = Field(default="", alias="PS3838_PROXY_URL")
+    ps3838_browser_only: bool = Field(default=False, alias="PS3838_BROWSER_ONLY")
+    ps3838_enable_stealth: bool = Field(default=True, alias="PS3838_ENABLE_STEALTH")
+    ps3838_retry_count: int = Field(default=2, alias="PS3838_RETRY_COUNT")
+
     estave_soccer_url: str = Field(
         default="https://www.e-stave.com/stave", alias="ESTAVE_SOCCER_URL"
     )
 
     scraper_request_timeout_sec: float = Field(default=30.0, alias="SCRAPER_REQUEST_TIMEOUT_SEC")
     scraper_enable_playwright: bool = Field(default=False, alias="SCRAPER_ENABLE_PLAYWRIGHT")
+    scraper_proxy_url: str = Field(default="", alias="SCRAPER_PROXY_URL")
     scrape_interval_sec: int = Field(default=300, alias="SCRAPE_INTERVAL_SEC")
     compare_interval_sec: int = Field(default=300, alias="COMPARE_INTERVAL_SEC")
     alert_dispatch_interval_sec: int = Field(default=30, alias="ALERT_DISPATCH_INTERVAL_SEC")
