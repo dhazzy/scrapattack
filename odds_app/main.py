@@ -7,7 +7,8 @@ from sqlalchemy.orm import Session
 from odds_app.config import get_settings
 from odds_app.db import Base, engine, get_db, ping_db
 from odds_app.models import Alert, OddsSnapshot
-from odds_app.schemas import AlertResponse, HealthResponse, OddsSnapshotResponse
+from odds_app.schemas import AlertResponse, HealthResponse, OddsSnapshotResponse, RunOnceResponse
+from odds_app.services.orchestrator import run_pipeline_once
 
 settings = get_settings()
 app = FastAPI(title=settings.app_name)
@@ -47,3 +48,8 @@ def recent_alerts(limit: int = 50, db: Session = Depends(get_db)) -> list[Alert]
 def recent_odds(limit: int = 50, db: Session = Depends(get_db)) -> list[OddsSnapshot]:
     stmt = select(OddsSnapshot).order_by(OddsSnapshot.scraped_at.desc()).limit(limit)
     return list(db.scalars(stmt))
+
+
+@app.post("/admin/run-once", response_model=RunOnceResponse)
+def admin_run_once(simulate_drop: bool = False, db: Session = Depends(get_db)) -> dict:
+    return run_pipeline_once(db, simulate_drop=simulate_drop)

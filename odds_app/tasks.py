@@ -7,6 +7,7 @@ from odds_app.scrapers.estave import EStaveScraper
 from odds_app.scrapers.ps3838 import PS3838Scraper
 from odds_app.services.alerts import TelegramNotifier, list_unsent_alerts, mark_alert_sent
 from odds_app.services.ingest import persist_quotes_and_detect_drops
+from odds_app.services.orchestrator import run_pipeline_once
 from odds_app.services.value_scan import scan_value_edges
 
 logger = logging.getLogger(__name__)
@@ -56,4 +57,12 @@ def dispatch_pending_alerts() -> dict:
         db.commit()
     result = {"alerts_checked": len(alerts), "alerts_sent": sent}
     logger.info("Alert dispatcher result: %s", result)
+    return result
+
+
+@celery.task(name="odds_app.tasks.run_full_pipeline_once")
+def run_full_pipeline_once(simulate_drop: bool = False) -> dict:
+    with SessionLocal() as db:
+        result = run_pipeline_once(db, simulate_drop=simulate_drop)
+    logger.info("Full pipeline run result: %s", result)
     return result

@@ -51,6 +51,7 @@ curl http://localhost:8000/health
 curl http://localhost:8000/health/db
 curl http://localhost:8000/odds/recent
 curl http://localhost:8000/alerts/recent
+curl -X POST "http://localhost:8000/admin/run-once?simulate_drop=false"
 ```
 
 5. Verify DB tables exist:
@@ -88,6 +89,18 @@ Both scrapers currently look for generic HTML attributes (`data-event-id`, `data
 - `GET /health/db`
 - `GET /odds/recent?limit=50`
 - `GET /alerts/recent?limit=50`
+- `POST /admin/run-once?simulate_drop=false`
+
+## Useful make targets
+
+```bash
+make up
+make logs
+make health
+make db-check
+make run-once
+make smoke
+```
 
 ## Troubleshooting startup
 
