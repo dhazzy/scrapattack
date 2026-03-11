@@ -69,10 +69,9 @@ def dashboard() -> str:
 </head>
 <body>
   <h1>Soccer Odds Dashboard</h1>
-  <div class="meta">Separate source tables + overlapping matches odds comparison.</div>
+  <div class="meta">Force refresh from both sources, separate source tables, and overlap odds comparison.</div>
   <div class="box">
-    <button onclick="runOnce(false)">Run once</button>
-    <button onclick="runOnce(true)">Run once + simulate drop</button>
+    <button onclick="forceRefresh()">Force refresh now</button>
     <span id="run-status" class="small"></span>
   </div>
 
@@ -207,15 +206,15 @@ def dashboard() -> str:
       renderAlerts(alerts);
     }
 
-    async function runOnce(simulate) {
+    async function forceRefresh() {
       const status = document.getElementById("run-status");
-      status.textContent = "Running...";
+      status.textContent = "Refreshing sources...";
       try {
-        const out = await fetchJson(`/admin/run-once?simulate_drop=${simulate}`, { method: "POST" });
+        const out = await fetchJson("/admin/force-refresh", { method: "POST" });
         status.textContent = `Done: quotes ps=${out.ps3838_quotes}, es=${out.estave_quotes}, alerts=${out.total_alerts_created}`;
         await refresh();
       } catch (err) {
-        status.textContent = `Run failed: ${err}`;
+        status.textContent = `Force refresh failed: ${err}`;
       }
     }
 
@@ -264,6 +263,11 @@ def matches_by_source(source: str, limit: int = 100, db: Session = Depends(get_d
 @app.get("/matches/overlap", response_model=list[OverlapMatchRow])
 def overlap_matches(limit: int = 100, db: Session = Depends(get_db)) -> list[OverlapMatchRow]:
     return list_overlap_matches(db, limit=limit)
+
+
+@app.post("/admin/force-refresh", response_model=RunOnceResponse)
+def admin_force_refresh(db: Session = Depends(get_db)) -> dict:
+    return run_pipeline_once(db, simulate_drop=False)
 
 
 @app.post("/admin/run-once", response_model=RunOnceResponse)

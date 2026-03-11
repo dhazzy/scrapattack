@@ -1,10 +1,15 @@
 import logging
-from datetime import datetime, timedelta, timezone
-from decimal import Decimal
+from datetime import datetime, timezone
 
 from odds_app.config import get_settings
 from odds_app.scrapers.base import OddsQuote
-from odds_app.scrapers.live_parser import DEFAULT_HEADERS, extract_live_quotes
+from odds_app.scrapers.live_parser import (
+    DEFAULT_HEADERS,
+    extract_live_quotes,
+    extract_quotes_from_html,
+    fetch_html_via_scrapingbee,
+    fetch_html_via_zenrows,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -16,9 +21,6 @@ class PS3838Scraper:
         self.settings = get_settings()
 
     async def scrape_soccer(self) -> list[OddsQuote]:
-        if self.settings.use_mock_scrape_data:
-            return self._mock_quotes()
-
         headers = dict(DEFAULT_HEADERS)
         headers.update(
             {
@@ -67,39 +69,49 @@ class PS3838Scraper:
                 use_playwright,
             )
 
+        provider_quotes = await self._try_unblock_provider_paths()
+        if provider_quotes:
+            return provider_quotes
+
         logger.warning(
-            "No live PS3838 quotes parsed. Usually requires residential proxy and valid session cookies."
+            "No live PS3838 quotes parsed. Try residential proxy + valid session cookie or set a provider API key."
         )
         return []
 
-    def _mock_quotes(self) -> list[OddsQuote]:
+    async def _try_unblock_provider_paths(self) -> list[OddsQuote]:
         now = datetime.now(timezone.utc)
-        kickoff = now + timedelta(hours=6)
-        return [
-            OddsQuote(
-                source=self.source,
-                sport="soccer",
-                league="England Premier League",
-                external_event_id="ps-ars-liv-001",
-                home_team="Arsenal",
-                away_team="Liverpool",
-                kickoff_utc=kickoff,
-                market_type="1x2",
-                selection="home",
-                odds_decimal=Decimal("2.35"),
-                scraped_at=now,
-            ),
-            OddsQuote(
-                source=self.source,
-                sport="soccer",
-                league="Spain La Liga",
-                external_event_id="ps-rma-atm-002",
-                home_team="Real Madrid",
-                away_team="Atletico Madrid",
-                kickoff_utc=kickoff + timedelta(hours=2),
-                market_type="1x2",
-                selection="home",
-                odds_decimal=Decimal("1.95"),
-                scraped_at=now,
-            ),
-        ]
+        timeout_sec = max(self.settings.scraper_request_timeout_sec, 45.0)
+
+        if self.settings.ps3838_zenrows_api_key:
+            try:
+                html = await fetch_html_via_zenrows(
+                    target_url=self.settings.ps3838_soccer_url,
+                    api_key=self.settings.ps3838_zenrows_api_key,
+                    timeout_sec=timeout_sec,
+                    js_render=True,
+                )
+                quotes = extract_quotes_from_html(source=self.source, html=html, now=now)
+                if quotes:
+                    logger.info("PS3838 extraction succeeded via ZenRows.")
+                    return quotes
+                logger.warning("ZenRows returned page but no parseable PS3838 quotes.")
+            except Exception as exc:
+                logger.warning("ZenRows PS3838 fetch failed: %s", exc)
+
+        if self.settings.ps3838_scrapingbee_api_key:
+            try:
+                html = await fetch_html_via_scrapingbee(
+                    target_url=self.settings.ps3838_soccer_url,
+                    api_key=self.settings.ps3838_scrapingbee_api_key,
+                    timeout_sec=timeout_sec,
+                    render_js=True,
+                )
+                quotes = extract_quotes_from_html(source=self.source, html=html, now=now)
+                if quotes:
+                    logger.info("PS3838 extraction succeeded via ScrapingBee.")
+                    return quotes
+                logger.warning("ScrapingBee returned page but no parseable PS3838 quotes.")
+            except Exception as exc:
+                logger.warning("ScrapingBee PS3838 fetch failed: %s", exc)
+
+        return []

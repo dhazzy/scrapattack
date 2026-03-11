@@ -149,6 +149,18 @@ def _extract_json_from_script_tags(html: str) -> list[Any]:
     return payloads
 
 
+def extract_quotes_from_html(
+    source: str,
+    html: str,
+    now: datetime | None = None,
+) -> list[OddsQuote]:
+    captured_at = now or datetime.now(timezone.utc)
+    quotes: list[OddsQuote] = []
+    for payload in _extract_json_from_script_tags(html):
+        quotes.extend(_extract_quotes_from_json_blob(source, payload, captured_at))
+    return _dedupe_quotes(quotes)
+
+
 async def _fetch_page_html(
     url: str,
     timeout_sec: float,
@@ -165,6 +177,36 @@ async def _fetch_page_html(
         response = await client.get(url, headers=merged_headers, follow_redirects=True)
         response.raise_for_status()
         return response.text
+
+
+async def fetch_html_via_zenrows(
+    target_url: str, api_key: str, timeout_sec: float = 45.0, js_render: bool = True
+) -> str:
+    params = {
+        "apikey": api_key,
+        "url": target_url,
+        "js_render": "true" if js_render else "false",
+        "premium_proxy": "true",
+    }
+    async with httpx.AsyncClient(timeout=timeout_sec) as client:
+        resp = await client.get("https://api.zenrows.com/v1/", params=params)
+        resp.raise_for_status()
+        return resp.text
+
+
+async def fetch_html_via_scrapingbee(
+    target_url: str, api_key: str, timeout_sec: float = 45.0, render_js: bool = True
+) -> str:
+    params = {
+        "api_key": api_key,
+        "url": target_url,
+        "render_js": "true" if render_js else "false",
+        "premium_proxy": "true",
+    }
+    async with httpx.AsyncClient(timeout=timeout_sec) as client:
+        resp = await client.get("https://app.scrapingbee.com/api/v1/", params=params)
+        resp.raise_for_status()
+        return resp.text
 
 
 def _cookie_header_to_playwright_cookies(url: str, cookie_header: str) -> list[dict[str, Any]]:
@@ -294,8 +336,7 @@ async def extract_live_quotes(
                 headers=headers,
                 proxy_url=proxy_url,
             )
-            for payload in _extract_json_from_script_tags(html):
-                quotes.extend(_extract_quotes_from_json_blob(source, payload, now))
+            quotes.extend(extract_quotes_from_html(source=source, html=html, now=now))
         except Exception as exc:
             logger.warning("HTML extraction failed for %s: %s", source, exc)
 

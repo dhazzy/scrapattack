@@ -1,6 +1,6 @@
 import logging
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
@@ -21,20 +21,16 @@ class EStaveScraper:
         self.settings = get_settings()
 
     async def scrape_soccer(self) -> list[OddsQuote]:
-        if self.settings.use_mock_scrape_data:
-            return self._mock_quotes()
-
-        # Primary path: dedicated mobile endpoint used by site frontend.
         mobile_quotes = await self._scrape_mobile_service_quotes()
         if mobile_quotes:
             return mobile_quotes
 
-        # Secondary path: generic network/script extractor.
         generic_quotes = await extract_live_quotes(
             source=self.source,
             url=self.settings.estave_soccer_url,
             timeout_sec=self.settings.scraper_request_timeout_sec,
             enable_playwright=self.settings.scraper_enable_playwright,
+            proxy_url=self.settings.scraper_proxy_url or None,
         )
         if generic_quotes:
             return generic_quotes
@@ -48,7 +44,11 @@ class EStaveScraper:
         now = datetime.now(timezone.utc)
         app_uuid = str(uuid.uuid4())
 
-        async with httpx.AsyncClient(timeout=self.settings.scraper_request_timeout_sec) as client:
+        client_kwargs: dict[str, Any] = {"timeout": self.settings.scraper_request_timeout_sec}
+        if self.settings.scraper_proxy_url:
+            client_kwargs["proxy"] = self.settings.scraper_proxy_url
+
+        async with httpx.AsyncClient(**client_kwargs) as client:
             service_resp = await client.get(f"{base_url}/service.json", headers=headers)
             service_resp.raise_for_status()
             service_url = service_resp.json().get("serviceURL", "_MobileService.aspx")
@@ -90,7 +90,6 @@ class EStaveScraper:
                 return []
             quotes = self._quotes_from_stave_payload(payload, now)
             if not quotes:
-                # Fallback to betBooster if main list parsing changes.
                 booster = await self._request_bet_booster(client, service_endpoint, headers, common)
                 quotes = self._quotes_from_bet_booster(booster, now)
             return quotes
@@ -147,8 +146,7 @@ class EStaveScraper:
             home_team, away_team = [part.strip() for part in match_name.split(" - ", 1)]
             league_parts = [str(event.get("p") or "").strip(), str(event.get("s") or "").strip()]
             league = " / ".join([p for p in league_parts if p]) or None
-            kickoff_raw = event.get("h")
-            kickoff_utc = self._parse_dt(kickoff_raw)
+            kickoff_utc = self._parse_dt(event.get("h"))
             home_odds = self._extract_home_odds_from_markets(event.get("bc"))
             if home_odds is None or event_id in seen:
                 continue
@@ -247,35 +245,3 @@ class EStaveScraper:
             return parsed.replace(tzinfo=timezone.utc)
         except Exception:
             return None
-
-    def _mock_quotes(self) -> list[OddsQuote]:
-        now = datetime.now(timezone.utc)
-        kickoff = now + timedelta(hours=6)
-        return [
-            OddsQuote(
-                source=self.source,
-                sport="soccer",
-                league="England Premier League",
-                external_event_id="es-ars-liv-a",
-                home_team="Arsenal FC",
-                away_team="Liverpool FC",
-                kickoff_utc=kickoff,
-                market_type="1x2",
-                selection="home",
-                odds_decimal=Decimal("2.48"),
-                scraped_at=now,
-            ),
-            OddsQuote(
-                source=self.source,
-                sport="soccer",
-                league="Spain La Liga",
-                external_event_id="es-rma-atm-b",
-                home_team="Real Madrid CF",
-                away_team="Atletico Madrid",
-                kickoff_utc=kickoff + timedelta(hours=2),
-                market_type="1x2",
-                selection="home",
-                odds_decimal=Decimal("2.10"),
-                scraped_at=now,
-            ),
-        ]

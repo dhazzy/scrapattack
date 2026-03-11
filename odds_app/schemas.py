@@ -106,3 +106,5 @@ class PS3838DiagnosticsOverrides(BaseModel):
     ps3838_browser_only: bool | None = None
     ps3838_enable_stealth: bool | None = None
     ps3838_retry_count: int | None = None
+    ps3838_zenrows_api_key: str | None = None
+    ps3838_scrapingbee_api_key: str | None = None

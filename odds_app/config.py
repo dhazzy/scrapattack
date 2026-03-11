@@ -5,7 +5,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     app_name: str = Field(default="Soccer Odds Watcher", alias="APP_NAME")
     app_env: str = Field(default="development", alias="APP_ENV")
@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     ps3838_browser_only: bool = Field(default=False, alias="PS3838_BROWSER_ONLY")
     ps3838_enable_stealth: bool = Field(default=True, alias="PS3838_ENABLE_STEALTH")
     ps3838_retry_count: int = Field(default=2, alias="PS3838_RETRY_COUNT")
+    ps3838_zenrows_api_key: str = Field(default="", alias="PS3838_ZENROWS_API_KEY")
+    ps3838_scrapingbee_api_key: str = Field(default="", alias="PS3838_SCRAPINGBEE_API_KEY")
 
     estave_soccer_url: str = Field(
         default="https://www.e-stave.com/stave", alias="ESTAVE_SOCCER_URL"
@@ -46,8 +48,6 @@ class Settings(BaseSettings):
     odds_drop_lookback_min: int = Field(default=15, alias="ODDS_DROP_LOOKBACK_MIN")
     value_edge_threshold_pct: float = Field(default=4.0, alias="VALUE_EDGE_THRESHOLD_PCT")
     alert_cooldown_min: int = Field(default=20, alias="ALERT_COOLDOWN_MIN")
-
-    use_mock_scrape_data: bool = Field(default=True, alias="USE_MOCK_SCRAPE_DATA")
 
 
 @lru_cache

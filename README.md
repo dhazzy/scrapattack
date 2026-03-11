@@ -1,24 +1,26 @@
 # scrapattack
 
-24/7 soccer odds scraping, cross-source matching, and alerting with separate source tables and overlap comparison UI.
+24/7 soccer odds scraping, cross-source matching, and alerting.
 
-## What is implemented
+## What you have now
 
-- FastAPI API + lightweight dashboard UI (`/`)
-- Celery worker + beat scheduler
-- PostgreSQL + Redis stack via Docker Compose
-- Odds snapshots (`odds_snapshots`)
-- Alerts (`alerts`)
-- Canonical match mapping:
-  - `canonical_matches` (internal shared match IDs)
-  - `source_events` (source event IDs mapped to canonical IDs)
-- Price drop detection
-- Cross-site value-edge detection (`ps3838` vs `e-stave`)
-- Telegram alert sender
+- Live scrapers (no mock mode):
+  - `ps3838`
+  - `e_stave`
+- Canonical same-match mapping across sources:
+  - `canonical_matches`
+  - `source_events`
+- Odds snapshots + alerts
+- Dashboard UI with:
+  - **PS3838 matches table**
+  - **e-stave matches table**
+  - **matches on both sources** with odds comparison
+- PS3838 diagnostics endpoint (GET + POST overrides)
+- Force-refresh endpoint/button to scrape now
 
-## Scrape/compare cadence (5 minutes)
+## Schedule (every 5 min)
 
-Configured by env vars:
+Configured via:
 
 ```env
 SCRAPE_INTERVAL_SEC=300
@@ -26,115 +28,58 @@ COMPARE_INTERVAL_SEC=300
 ALERT_DISPATCH_INTERVAL_SEC=30
 ```
 
-## Why canonical IDs matter
+## Force refresh now (instant scrape)
 
-`ps3838` and `e-stave` use different external event IDs.  
-The app creates one internal match (`canonical_matches.id`) and maps each source event into it (`source_events`), so same real-world match shares one ID.
-
-## Parser mode
-
-### Mock mode
-
-```env
-USE_MOCK_SCRAPE_DATA=true
-```
-
-### Live mode
-
-```env
-USE_MOCK_SCRAPE_DATA=false
-SCRAPER_REQUEST_TIMEOUT_SEC=30
-SCRAPER_ENABLE_PLAYWRIGHT=false
-```
-
-### Source notes
-
-- `e-stave`: scraper uses live mobile endpoint (`_MobileService.aspx`) and parses soccer events/odds.
-- `ps3838`: often Cloudflare-protected. Scraper has bypass options (proxy + cookie + stealth browser retries).
-
-## PS3838 bypass options
-
-Set in `.env`:
-
-```env
-PS3838_PROXY_URL=http://username:password@proxy-host:proxy-port
-PS3838_COOKIE_HEADER=cf_clearance=...; session=...
-PS3838_BROWSER_ONLY=false
-PS3838_ENABLE_STEALTH=true
-PS3838_RETRY_COUNT=2
-SCRAPER_ENABLE_PLAYWRIGHT=true
-```
-
-Notes:
-- If your host IP is blocked, you usually need a **residential proxy**.
-- Cookie header should come from a valid browser session.
-- Browser mode may still fail without good IP/session reputation.
-
-Install browser binaries for Playwright:
+API:
 
 ```bash
-python -m playwright install chromium
+curl -X POST http://localhost:8000/admin/force-refresh
 ```
 
-## Quick start
+UI:
+- Open `/` and click **Force refresh now**
 
-```bash
-cp .env.example .env
-docker compose up --build
-```
-
-## Useful commands
-
-```bash
-make health
-make db-check
-make run-once
-make smoke
-```
-
-## API endpoints
+## Main API endpoints
 
 - `GET /` dashboard UI
 - `GET /health`
 - `GET /health/db`
-- `GET /odds/recent?limit=50`
 - `GET /alerts/recent?limit=50`
-- `GET /matches/recent?limit=50`
-- `GET /matches/source/{source}?limit=100` (`source` = `ps3838` or `e_stave`)
+- `GET /odds/recent?limit=50`
+- `GET /matches/source/{source}?limit=100` (`source=ps3838|e_stave`)
 - `GET /matches/overlap?limit=100`
-- `POST /admin/run-once?simulate_drop=false`
+- `POST /admin/force-refresh`
 - `GET /admin/diagnostics/ps3838`
 - `POST /admin/diagnostics/ps3838`
 
-## DB table check
+## PS3838 access options
 
-```bash
-docker compose exec api python -m odds_app.check_db
+PS3838 is often Cloudflare-protected. Use one or more:
+
+```env
+PS3838_PROXY_URL=http://user:pass@proxy-host:proxy-port
+PS3838_COOKIE_HEADER=cf_clearance=...; session=...
+PS3838_BROWSER_ONLY=false
+PS3838_ENABLE_STEALTH=true
+SCRAPER_ENABLE_PLAYWRIGHT=true
 ```
 
-Expected key tables:
-- `odds_snapshots`
-- `alerts`
-- `canonical_matches`
-- `source_events`
+Alternative provider-based access (optional):
 
+```env
+PS3838_ZENROWS_API_KEY=...
+PS3838_SCRAPINGBEE_API_KEY=...
+```
 
-## PS3838 diagnostics endpoint
+## PS3838 diagnostics
 
-Run:
+Baseline:
 
 ```bash
 curl http://localhost:8000/admin/diagnostics/ps3838
 ```
 
-It reports each bypass layer separately:
-- proxy reachability
-- direct HTML access
-- Playwright navigation behavior
-- extraction quote count
-- recommended next tuning steps
-
-Override run (without restart):
+Try overrides without restart:
 
 ```bash
 curl -X POST http://localhost:8000/admin/diagnostics/ps3838 \
@@ -147,13 +92,15 @@ curl -X POST http://localhost:8000/admin/diagnostics/ps3838 \
   }'
 ```
 
-Supported override fields:
-- `scraper_enable_playwright`
-- `scraper_request_timeout_sec`
-- `scraper_proxy_url`
-- `ps3838_proxy_url`
-- `ps3838_cookie_header`
-- `ps3838_referer_url`
-- `ps3838_browser_only`
-- `ps3838_enable_stealth`
-- `ps3838_retry_count`
+## Quick start
+
+```bash
+cp .env.example .env
+docker compose up --build
+```
+
+## Playwright setup
+
+```bash
+python -m playwright install chromium
+```
