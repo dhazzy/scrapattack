@@ -1,9 +1,11 @@
+import time
+
 from fastapi import Depends, FastAPI
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from odds_app.config import get_settings
-from odds_app.db import Base, engine, get_db
+from odds_app.db import Base, engine, get_db, ping_db
 from odds_app.models import Alert, OddsSnapshot
 from odds_app.schemas import AlertResponse, HealthResponse, OddsSnapshotResponse
 
@@ -13,12 +15,26 @@ app = FastAPI(title=settings.app_name)
 
 @app.on_event("startup")
 def on_startup() -> None:
-    Base.metadata.create_all(bind=engine)
+    last_error: Exception | None = None
+    for _ in range(settings.db_startup_max_retries):
+        try:
+            Base.metadata.create_all(bind=engine)
+            return
+        except Exception as exc:  # pragma: no cover - startup resilience path
+            last_error = exc
+            time.sleep(settings.db_startup_retry_delay_sec)
+    if last_error is not None:
+        raise last_error
 
 
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     return HealthResponse(status="ok", app=settings.app_name)
+
+
+@app.get("/health/db")
+def health_db() -> dict:
+    return {"status": "ok" if ping_db() else "error"}
 
 
 @app.get("/alerts/recent", response_model=list[AlertResponse])

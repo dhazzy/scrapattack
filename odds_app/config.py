@@ -15,6 +15,8 @@ class Settings(BaseSettings):
         alias="DATABASE_URL",
     )
     redis_url: str = Field(default="redis://localhost:6379/0", alias="REDIS_URL")
+    db_startup_max_retries: int = Field(default=20, alias="DB_STARTUP_MAX_RETRIES")
+    db_startup_retry_delay_sec: float = Field(default=1.5, alias="DB_STARTUP_RETRY_DELAY_SEC")
 
     telegram_bot_token: str = Field(default="", alias="TELEGRAM_BOT_TOKEN")
     telegram_chat_id: str = Field(default="", alias="TELEGRAM_CHAT_ID")

@@ -1,8 +1,7 @@
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from sqlalchemy import Boolean, DateTime, Index, Numeric, String, Text
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import Boolean, DateTime, Index, JSON, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from odds_app.db import Base
@@ -56,7 +55,7 @@ class Alert(Base):
     away_team: Mapped[str] = mapped_column(String(128))
     kickoff_utc: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     message: Mapped[str] = mapped_column(Text)
-    details: Mapped[dict] = mapped_column(JSONB, default=dict)
+    details: Mapped[dict] = mapped_column(JSON, default=dict)
     is_sent: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False
