@@ -9,6 +9,31 @@ from odds_app.config import Settings
 from odds_app.scrapers.live_parser import DEFAULT_HEADERS, extract_live_quotes
 
 
+DIAGNOSTIC_OVERRIDE_FIELDS = {
+    "scraper_enable_playwright",
+    "scraper_request_timeout_sec",
+    "scraper_proxy_url",
+    "ps3838_proxy_url",
+    "ps3838_cookie_header",
+    "ps3838_referer_url",
+    "ps3838_browser_only",
+    "ps3838_enable_stealth",
+    "ps3838_retry_count",
+}
+
+
+def settings_with_overrides(settings: Settings, overrides: dict[str, Any] | None) -> Settings:
+    if not overrides:
+        return settings
+    updates: dict[str, Any] = {}
+    for key, value in overrides.items():
+        if key in DIAGNOSTIC_OVERRIDE_FIELDS and value is not None:
+            updates[key] = value
+    if not updates:
+        return settings
+    return settings.model_copy(update=updates)
+
+
 def _cookie_names(cookie_header: str) -> list[str]:
     names: list[str] = []
     if not cookie_header.strip():
@@ -290,5 +315,6 @@ async def run_ps3838_diagnostics(settings: Settings) -> dict[str, Any]:
     }
 
 
-def run_ps3838_diagnostics_sync(settings: Settings) -> dict[str, Any]:
-    return asyncio.run(run_ps3838_diagnostics(settings))
+def run_ps3838_diagnostics_sync(settings: Settings, overrides: dict[str, Any] | None = None) -> dict[str, Any]:
+    effective_settings = settings_with_overrides(settings, overrides)
+    return asyncio.run(run_ps3838_diagnostics(effective_settings))

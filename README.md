@@ -102,6 +102,7 @@ make smoke
 - `GET /matches/recent?limit=50`
 - `POST /admin/run-once?simulate_drop=false`
 - `GET /admin/diagnostics/ps3838`
+- `POST /admin/diagnostics/ps3838`
 
 ## DB table check
 
@@ -130,3 +131,27 @@ It reports each bypass layer separately:
 - Playwright navigation behavior
 - extraction quote count
 - recommended next tuning steps
+
+Override run (without restart):
+
+```bash
+curl -X POST http://localhost:8000/admin/diagnostics/ps3838 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "scraper_enable_playwright": true,
+    "ps3838_enable_stealth": true,
+    "ps3838_proxy_url": "http://user:pass@proxy-host:proxy-port",
+    "ps3838_cookie_header": "cf_clearance=...; session=..."
+  }'
+```
+
+Supported override fields:
+- `scraper_enable_playwright`
+- `scraper_request_timeout_sec`
+- `scraper_proxy_url`
+- `ps3838_proxy_url`
+- `ps3838_cookie_header`
+- `ps3838_referer_url`
+- `ps3838_browser_only`
+- `ps3838_enable_stealth`
+- `ps3838_retry_count`

@@ -66,3 +66,16 @@ class MatchSummaryResponse(BaseModel):
     kickoff_bucket_utc: datetime | None
     source_events: list[SourceEventSummary]
     updated_at: datetime
+
+
+class PS3838DiagnosticsOverrides(BaseModel):
+    scraper_enable_playwright: bool | None = None
+    scraper_request_timeout_sec: float | None = None
+    scraper_proxy_url: str | None = None
+
+    ps3838_proxy_url: str | None = None
+    ps3838_cookie_header: str | None = None
+    ps3838_referer_url: str | None = None
+    ps3838_browser_only: bool | None = None
+    ps3838_enable_stealth: bool | None = None
+    ps3838_retry_count: int | None = None

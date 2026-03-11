@@ -1,6 +1,6 @@
 import time
 
-from fastapi import Depends, FastAPI
+from fastapi import Body, Depends, FastAPI
 from fastapi.responses import HTMLResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -14,6 +14,7 @@ from odds_app.schemas import (
     MatchSummaryResponse,
     OddsSnapshotResponse,
     RunOnceResponse,
+    PS3838DiagnosticsOverrides,
 )
 from odds_app.services.match_views import list_recent_matches
 from odds_app.services.diagnostics import run_ps3838_diagnostics_sync
@@ -197,3 +198,10 @@ def admin_run_once(simulate_drop: bool = False, db: Session = Depends(get_db)) -
 @app.get("/admin/diagnostics/ps3838")
 def admin_ps3838_diagnostics() -> dict:
     return run_ps3838_diagnostics_sync(settings)
+
+
+@app.post("/admin/diagnostics/ps3838")
+def admin_ps3838_diagnostics_with_overrides(
+    overrides: PS3838DiagnosticsOverrides = Body(default_factory=PS3838DiagnosticsOverrides),
+) -> dict:
+    return run_ps3838_diagnostics_sync(settings, overrides.model_dump(exclude_none=True))
