@@ -20,7 +20,9 @@ AWAY_KEYS = ["away", "awayTeam", "away_team", "team2", "guest", "a"]
 LEAGUE_KEYS = ["league", "leagueName", "competition", "tournament"]
 EVENT_KEYS = ["eventId", "event_id", "matchId", "fixtureId", "id"]
 KICKOFF_KEYS = ["kickoff", "startsAt", "startTime", "eventTime", "start_date", "date"]
-HOME_ODDS_KEYS = ["homeOdds", "home_odds", "oddsHome", "priceHome", "hOdds"]
+HOME_ODDS_KEYS = ["homeOdds", "home_odds", "oddsHome", "priceHome", "hOdds", "odds1"]
+DRAW_ODDS_KEYS = ["drawOdds", "draw_odds", "oddsDraw", "priceDraw", "dOdds", "oddsX"]
+AWAY_ODDS_KEYS = ["awayOdds", "away_odds", "oddsAway", "priceAway", "aOdds", "odds2"]
 
 DEFAULT_HEADERS = {
     "User-Agent": (
@@ -87,45 +89,63 @@ def _walk_json_nodes(value: Any) -> Iterable[dict[str, Any]]:
 def _extract_quotes_from_json_blob(source: str, payload: Any, now: datetime) -> list[OddsQuote]:
     quotes: list[OddsQuote] = []
     seen_ids: set[tuple[str, str]] = set()
+
     for node in _walk_json_nodes(payload):
         home = _safe_get(node, HOME_KEYS)
         away = _safe_get(node, AWAY_KEYS)
         event_id = _safe_get(node, EVENT_KEYS)
-        home_odds = _safe_get(node, HOME_ODDS_KEYS)
-        if isinstance(node.get("odds"), dict):
-            home_odds = node["odds"].get("home") or home_odds
-        if not (home and away and event_id and home_odds):
+        if not (home and away and event_id):
             continue
 
-        odds_value = _to_decimal(home_odds)
-        if odds_value is None:
-            continue
+        selections: list[tuple[str, Decimal | None]] = [
+            ("home", _to_decimal(_safe_get(node, HOME_ODDS_KEYS))),
+            ("draw", _to_decimal(_safe_get(node, DRAW_ODDS_KEYS))),
+            ("away", _to_decimal(_safe_get(node, AWAY_ODDS_KEYS))),
+        ]
+        if isinstance(node.get("odds"), dict):
+            odds_node = node["odds"]
+            selections = [
+                ("home", _to_decimal(odds_node.get("home") or odds_node.get("1"))),
+                ("draw", _to_decimal(odds_node.get("draw") or odds_node.get("x") or odds_node.get("0"))),
+                ("away", _to_decimal(odds_node.get("away") or odds_node.get("2"))),
+            ]
+
         event_id_str = str(event_id).strip()
         if not event_id_str:
             continue
-        dedupe_key = (event_id_str, "home")
-        if dedupe_key in seen_ids:
-            continue
-        seen_ids.add(dedupe_key)
 
         kickoff_utc = _parse_dt(_safe_get(node, KICKOFF_KEYS))
         league = _safe_get(node, LEAGUE_KEYS)
-        quotes.append(
-            OddsQuote(
-                source=source,
-                sport="soccer",
-                league=str(league) if league else None,
-                external_event_id=event_id_str,
-                home_team=str(home).strip(),
-                away_team=str(away).strip(),
-                kickoff_utc=kickoff_utc,
-                market_type="1x2",
-                selection="home",
-                odds_decimal=odds_value,
-                scraped_at=now,
+        for selection, odds_value in selections:
+            if odds_value is None:
+                continue
+            dedupe_key = (event_id_str, selection)
+            if dedupe_key in seen_ids:
+                continue
+            seen_ids.add(dedupe_key)
+            quotes.append(
+                OddsQuote(
+                    source=source,
+                    sport="soccer",
+                    league=str(league) if league else None,
+                    external_event_id=event_id_str,
+                    home_team=str(home).strip(),
+                    away_team=str(away).strip(),
+                    kickoff_utc=kickoff_utc,
+                    market_type="1x2",
+                    selection=selection,
+                    odds_decimal=odds_value,
+                    scraped_at=now,
+                )
             )
-        )
     return quotes
+
+
+def extract_quotes_from_payload(
+    source: str, payload: Any, now: datetime | None = None
+) -> list[OddsQuote]:
+    captured_at = now or datetime.now(timezone.utc)
+    return _dedupe_quotes(_extract_quotes_from_json_blob(source, payload, captured_at))
 
 
 def _extract_json_from_script_tags(html: str) -> list[Any]:
@@ -293,9 +313,9 @@ async def _collect_playwright_json_payloads(
 
 
 def _dedupe_quotes(quotes: list[OddsQuote]) -> list[OddsQuote]:
-    unique: dict[str, OddsQuote] = {}
+    unique: dict[tuple[str, str, str], OddsQuote] = {}
     for quote in quotes:
-        unique[quote.external_event_id] = quote
+        unique[(quote.external_event_id, quote.market_type, quote.selection)] = quote
     return list(unique.values())
 
 

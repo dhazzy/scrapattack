@@ -1,5 +1,4 @@
 import logging
-from datetime import datetime, timezone
 
 from odds_app.config import get_settings
 from odds_app.scrapers.base import OddsQuote
@@ -10,6 +9,7 @@ from odds_app.scrapers.live_parser import (
     fetch_html_via_scrapingbee,
     fetch_html_via_zenrows,
 )
+from odds_app.scrapers.vodds import scrape_ps3838_from_vodds
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +21,20 @@ class PS3838Scraper:
         self.settings = get_settings()
 
     async def scrape_soccer(self) -> list[OddsQuote]:
+        # Primary: scrape PS3838 odds via Vodds dashboard if credentials are configured.
+        if self.settings.vodds_username and self.settings.vodds_password:
+            quotes = await scrape_ps3838_from_vodds(
+                dashboard_url=self.settings.vodds_dashboard_url,
+                username=self.settings.vodds_username,
+                password=self.settings.vodds_password,
+                headless=self.settings.vodds_headless,
+                timeout_sec=self.settings.vodds_timeout_sec,
+            )
+            if quotes:
+                logger.info("PS3838 scraping via Vodds succeeded with %s quotes", len(quotes))
+                return quotes
+            logger.warning("Vodds PS3838 scrape returned no quotes, trying direct paths.")
+
         headers = dict(DEFAULT_HEADERS)
         headers.update(
             {
@@ -74,12 +88,11 @@ class PS3838Scraper:
             return provider_quotes
 
         logger.warning(
-            "No live PS3838 quotes parsed. Try residential proxy + valid session cookie or set a provider API key."
+            "No live PS3838 quotes parsed. Try Vodds login, residential proxy + valid session cookie, or provider API key."
         )
         return []
 
     async def _try_unblock_provider_paths(self) -> list[OddsQuote]:
-        now = datetime.now(timezone.utc)
         timeout_sec = max(self.settings.scraper_request_timeout_sec, 45.0)
 
         if self.settings.ps3838_zenrows_api_key:
@@ -90,7 +103,7 @@ class PS3838Scraper:
                     timeout_sec=timeout_sec,
                     js_render=True,
                 )
-                quotes = extract_quotes_from_html(source=self.source, html=html, now=now)
+                quotes = extract_quotes_from_html(source=self.source, html=html)
                 if quotes:
                     logger.info("PS3838 extraction succeeded via ZenRows.")
                     return quotes
@@ -106,7 +119,7 @@ class PS3838Scraper:
                     timeout_sec=timeout_sec,
                     render_js=True,
                 )
-                quotes = extract_quotes_from_html(source=self.source, html=html, now=now)
+                quotes = extract_quotes_from_html(source=self.source, html=html)
                 if quotes:
                     logger.info("PS3838 extraction succeeded via ScrapingBee.")
                     return quotes

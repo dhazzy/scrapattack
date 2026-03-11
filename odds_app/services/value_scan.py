@@ -45,7 +45,6 @@ def scan_value_edges(db: Session) -> int:
 
     stmt = (
         select(OddsSnapshot)
-        .where(OddsSnapshot.sport == "soccer")
         .where(OddsSnapshot.source.in_(["ps3838", "e_stave"]))
         .where(OddsSnapshot.scraped_at >= since)
         .order_by(OddsSnapshot.scraped_at.desc())
@@ -80,6 +79,7 @@ def scan_value_edges(db: Session) -> int:
         canonical = db.get(CanonicalMatch, canonical_match_id)
         home = canonical.display_home_team if canonical else ps.home_team
         away = canonical.display_away_team if canonical else ps.away_team
+        sport = canonical.sport if canonical else ps.sport
 
         msg = (
             f"[VALUE EDGE] {home} vs {away} | {market_type}:{selection} "
@@ -88,7 +88,7 @@ def scan_value_edges(db: Session) -> int:
         alert = Alert(
             alert_type="value_edge",
             source="comparison",
-            sport="soccer",
+            sport=sport,
             market_type=market_type,
             selection=selection,
             home_team=home,

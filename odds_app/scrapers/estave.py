@@ -13,6 +13,13 @@ from odds_app.scrapers.live_parser import extract_live_quotes
 
 logger = logging.getLogger(__name__)
 
+# Pulled from live probing. Different b values expose different early lists.
+SPORT_REQUESTS = [
+    {"sport": "soccer", "f": 1, "b_values": [0, 2, 4, 6, 7, 11]},
+    {"sport": "basketball", "f": 2, "b_values": [0, 2, 6, 7, 11]},
+    {"sport": "tennis", "f": 4, "b_values": [0, 6, 7, 11]},
+]
+
 
 class EStaveScraper:
     source = "e_stave"
@@ -76,6 +83,8 @@ class EStaveScraper:
                 return []
 
             common = {
+                "controller": "stave",
+                "action": "stave",
                 "appVer": 1,
                 "serviceVer": 2,
                 "serviceType": "sencha",
@@ -83,59 +92,56 @@ class EStaveScraper:
                 "CSRFToken": csrf_token,
                 "appSig": "",
                 "appKey": "mobileestave",
+                "a": 3,
+                "g": 25,
+                "i": "false",
+                "l": "",
+                "n": self.settings.estave_page_size,
             }
 
-            payload = await self._request_stave_payload(client, service_endpoint, headers, common)
-            if not payload:
-                return []
-            quotes = self._quotes_from_stave_payload(payload, now)
-            if not quotes:
-                booster = await self._request_bet_booster(client, service_endpoint, headers, common)
-                quotes = self._quotes_from_bet_booster(booster, now)
+            quotes: list[OddsQuote] = []
+            seen: set[tuple[str, str]] = set()
+            for request in SPORT_REQUESTS:
+                for b_value in request["b_values"]:
+                    for page in range(self.settings.estave_max_pages_per_query):
+                        params = {
+                            **common,
+                            "b": b_value,
+                            "f": request["f"],
+                            "d": page,
+                        }
+                        resp = await client.get(service_endpoint, headers=headers, params=params)
+                        if resp.status_code >= 400:
+                            break
+                        payload = resp.json()
+                        data = payload.get("data") if isinstance(payload, dict) else None
+                        events = data.get("bb") if isinstance(data, dict) else None
+                        if not isinstance(events, list) or not events:
+                            break
+
+                        page_quotes = self._quotes_from_events(events, request["sport"], now)
+                        if not page_quotes:
+                            break
+
+                        new_count = 0
+                        for quote in page_quotes:
+                            key = (quote.external_event_id, quote.selection)
+                            if key in seen:
+                                continue
+                            seen.add(key)
+                            quotes.append(quote)
+                            new_count += 1
+
+                        # d parameter appears to be sticky in many lists; stop once pages repeat.
+                        if new_count == 0:
+                            break
+
             return quotes
 
-    async def _request_stave_payload(
-        self,
-        client: httpx.AsyncClient,
-        endpoint: str,
-        headers: dict[str, str],
-        common: dict[str, Any],
-    ) -> dict[str, Any] | None:
-        candidates = [
-            {"a": 3, "b": 4, "d": 0, "f": 1, "g": 25, "i": "false", "l": "", "n": 10},
-            {"a": 3, "d": 1, "f": 1, "g": 25, "l": ""},
-        ]
-        for extra in candidates:
-            params = {"controller": "stave", "action": "stave", **extra, **common}
-            resp = await client.get(endpoint, headers=headers, params=params)
-            if resp.status_code >= 400:
-                continue
-            payload = resp.json()
-            if isinstance(payload, dict) and payload.get("success") is True and payload.get("data"):
-                return payload
-        return None
-
-    async def _request_bet_booster(
-        self,
-        client: httpx.AsyncClient,
-        endpoint: str,
-        headers: dict[str, str],
-        common: dict[str, Any],
-    ) -> dict[str, Any] | None:
-        params = {"controller": "stave", "action": "betBooster", "b": 0, **common}
-        resp = await client.get(endpoint, headers=headers, params=params)
-        if resp.status_code >= 400:
-            return None
-        data = resp.json()
-        return data if isinstance(data, dict) and data.get("success") is True else None
-
-    def _quotes_from_stave_payload(self, payload: dict[str, Any], now: datetime) -> list[OddsQuote]:
-        data = payload.get("data") or {}
-        events = data.get("bb") if isinstance(data, dict) else None
-        if not isinstance(events, list):
-            return []
+    def _quotes_from_events(
+        self, events: list[dict[str, Any]], sport: str, now: datetime
+    ) -> list[OddsQuote]:
         quotes: list[OddsQuote] = []
-        seen: set[str] = set()
         for event in events:
             if not isinstance(event, dict):
                 continue
@@ -147,30 +153,28 @@ class EStaveScraper:
             league_parts = [str(event.get("p") or "").strip(), str(event.get("s") or "").strip()]
             league = " / ".join([p for p in league_parts if p]) or None
             kickoff_utc = self._parse_dt(event.get("h"))
-            home_odds = self._extract_home_odds_from_markets(event.get("bc"))
-            if home_odds is None or event_id in seen:
-                continue
-            seen.add(event_id)
-            quotes.append(
-                OddsQuote(
-                    source=self.source,
-                    sport="soccer",
-                    league=league,
-                    external_event_id=event_id,
-                    home_team=home_team,
-                    away_team=away_team,
-                    kickoff_utc=kickoff_utc,
-                    market_type="1x2",
-                    selection="home",
-                    odds_decimal=home_odds,
-                    scraped_at=now,
+
+            for selection, odds in self._extract_1x2_market_odds(event.get("bc")):
+                quotes.append(
+                    OddsQuote(
+                        source=self.source,
+                        sport=sport,
+                        league=league,
+                        external_event_id=event_id,
+                        home_team=home_team,
+                        away_team=away_team,
+                        kickoff_utc=kickoff_utc,
+                        market_type="1x2",
+                        selection=selection,
+                        odds_decimal=odds,
+                        scraped_at=now,
+                    )
                 )
-            )
         return quotes
 
-    def _extract_home_odds_from_markets(self, markets: Any) -> Decimal | None:
+    def _extract_1x2_market_odds(self, markets: Any) -> list[tuple[str, Decimal]]:
         if not isinstance(markets, list):
-            return None
+            return []
         for market in markets:
             if not isinstance(market, dict):
                 continue
@@ -181,59 +185,35 @@ class EStaveScraper:
             options = market.get("k")
             if not isinstance(options, list):
                 continue
+
+            out: list[tuple[str, Decimal]] = []
             for option in options:
                 if not isinstance(option, dict):
                     continue
-                if str(option.get("c")) != "1" and str(option.get("b")) != "A":
+                selection = self._map_selection(option)
+                if not selection:
                     continue
                 try:
                     odds = Decimal(str(option.get("a")))
-                    if odds > 1:
-                        return odds
                 except Exception:
                     continue
-        return None
+                if odds <= 1:
+                    continue
+                out.append((selection, odds))
+            if out:
+                return out
+        return []
 
-    def _quotes_from_bet_booster(self, payload: dict[str, Any] | None, now: datetime) -> list[OddsQuote]:
-        if not payload:
-            return []
-        items = payload.get("items")
-        if not isinstance(items, list):
-            return []
-        quotes: list[OddsQuote] = []
-        seen: set[str] = set()
-        for group in items:
-            for event in (group.get("e") or []) if isinstance(group, dict) else []:
-                if not isinstance(event, dict):
-                    continue
-                event_id = str(event.get("a") or "").strip()
-                match = str(event.get("b") or "").strip()
-                if not event_id or " - " not in match:
-                    continue
-                home_team, away_team = [part.strip() for part in match.split(" - ", 1)]
-                try:
-                    odds = Decimal(str(event.get("c")))
-                except Exception:
-                    continue
-                if odds <= 1 or event_id in seen:
-                    continue
-                seen.add(event_id)
-                quotes.append(
-                    OddsQuote(
-                        source=self.source,
-                        sport="soccer",
-                        league=str(event.get("d") or "").strip() or None,
-                        external_event_id=event_id,
-                        home_team=home_team,
-                        away_team=away_team,
-                        kickoff_utc=None,
-                        market_type="1x2",
-                        selection="home",
-                        odds_decimal=odds,
-                        scraped_at=now,
-                    )
-                )
-        return quotes
+    def _map_selection(self, option: dict[str, Any]) -> str | None:
+        c_val = str(option.get("c") or "").strip().lower()
+        b_val = str(option.get("b") or "").strip().upper()
+        if c_val in {"1", "home"} or b_val == "A":
+            return "home"
+        if c_val in {"0", "x", "draw"} or b_val == "B":
+            return "draw"
+        if c_val in {"2", "away"} or b_val == "C":
+            return "away"
+        return None
 
     def _parse_dt(self, value: Any) -> datetime | None:
         if value is None:

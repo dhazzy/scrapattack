@@ -19,14 +19,14 @@ def canonical_key_for_quote(quote: OddsQuote) -> str:
     home_norm, away_norm = canonical_match_key(quote.home_team, quote.away_team)
     bucket = kickoff_bucket(quote.kickoff_utc)
     bucket_part = bucket.isoformat() if bucket else "unknown"
-    return f"{home_norm}|{away_norm}|{bucket_part}"
+    return f"{quote.sport}|{home_norm}|{away_norm}|{bucket_part}"
 
 
 def reverse_canonical_key_for_quote(quote: OddsQuote) -> str:
     home_norm, away_norm = canonical_match_key(quote.home_team, quote.away_team)
     bucket = kickoff_bucket(quote.kickoff_utc)
     bucket_part = bucket.isoformat() if bucket else "unknown"
-    return f"{away_norm}|{home_norm}|{bucket_part}"
+    return f"{quote.sport}|{away_norm}|{home_norm}|{bucket_part}"
 
 
 def resolve_source_event_mapping(db: Session, quote: OddsQuote) -> CanonicalMatch:

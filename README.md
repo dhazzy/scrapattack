@@ -1,12 +1,16 @@
 # scrapattack
 
-24/7 soccer odds scraping, cross-source matching, and alerting.
+24/7 sports odds scraping, cross-source matching, and alerting.
 
 ## What you have now
 
 - Live scrapers (no mock mode):
   - `ps3838`
   - `e_stave`
+- Sports in pipeline/UI:
+  - Football/Soccer
+  - Tennis
+  - Basketball
 - Canonical same-match mapping across sources:
   - `canonical_matches`
   - `source_events`
@@ -15,6 +19,7 @@
   - **PS3838 matches table**
   - **e-stave matches table**
   - **matches on both sources** with odds comparison
+  - Home/Draw/Away odds columns where available
 - PS3838 diagnostics endpoint (GET + POST overrides)
 - Force-refresh endpoint/button to scrape now
 
@@ -69,6 +74,23 @@ Alternative provider-based access (optional):
 ```env
 PS3838_ZENROWS_API_KEY=...
 PS3838_SCRAPINGBEE_API_KEY=...
+```
+
+PS3838 via Vodds dashboard login (primary fallback path):
+
+```env
+VODDS_DASHBOARD_URL=https://vodds.com/member/dashboard
+VODDS_USERNAME=...
+VODDS_PASSWORD=...
+VODDS_HEADLESS=true
+VODDS_TIMEOUT_SEC=60
+```
+
+e-stave depth controls (for more than the first 10-15 matches):
+
+```env
+ESTAVE_PAGE_SIZE=25
+ESTAVE_MAX_PAGES_PER_QUERY=40
 ```
 
 ## PS3838 diagnostics

@@ -19,11 +19,7 @@ from odds_app.schemas import (
     SourceMatchRow,
 )
 from odds_app.services.diagnostics import run_ps3838_diagnostics_sync
-from odds_app.services.match_views import (
-    list_overlap_matches,
-    list_recent_matches,
-    list_source_matches,
-)
+from odds_app.services.match_views import list_overlap_matches, list_recent_matches, list_source_matches
 from odds_app.services.orchestrator import run_pipeline_once
 
 settings = get_settings()
@@ -37,7 +33,7 @@ def on_startup() -> None:
         try:
             Base.metadata.create_all(bind=engine)
             return
-        except Exception as exc:  # pragma: no cover - startup resilience path
+        except Exception as exc:
             last_error = exc
             time.sleep(settings.db_startup_retry_delay_sec)
     if last_error is not None:
@@ -46,45 +42,49 @@ def on_startup() -> None:
 
 @app.get("/", response_class=HTMLResponse)
 def dashboard() -> str:
-    return """
-<!doctype html>
+    return """<!doctype html>
 <html>
 <head>
   <meta charset="utf-8"/>
-  <title>Soccer Odds Dashboard</title>
+  <title>Odds Dashboard</title>
   <style>
     body { font-family: Arial, sans-serif; margin: 20px; background: #f7f7f7; }
     h1 { margin-bottom: 6px; }
     h2 { margin-top: 30px; }
-    .meta { color: #555; margin-bottom: 18px; }
+    .meta { color: #555; margin-bottom: 10px; }
     button { padding: 8px 12px; margin-right: 10px; }
     table { border-collapse: collapse; width: 100%; background: white; margin-bottom: 24px; }
-    th, td { border: 1px solid #ddd; padding: 8px; font-size: 13px; vertical-align: top; }
+    th, td { border: 1px solid #ddd; padding: 8px; font-size: 12px; vertical-align: top; }
     th { background: #111; color: white; text-align: left; }
     .small { color: #666; font-size: 12px; }
     .box { margin-bottom: 18px; }
-    .positive { color: #0b7a0b; font-weight: bold; }
+    .positive { color: #0a7a0a; font-weight: bold; }
     .negative { color: #b20000; font-weight: bold; }
   </style>
 </head>
 <body>
-  <h1>Soccer Odds Dashboard</h1>
-  <div class="meta">Force refresh from both sources, separate source tables, and overlap odds comparison.</div>
+  <h1>Sports Odds Dashboard</h1>
+  <div class="meta">Football/Soccer, Tennis, Basketball | Home/Draw/Away odds | PS3838 + e-stave + overlap.</div>
   <div class="box">
     <button onclick="forceRefresh()">Force refresh now</button>
     <span id="run-status" class="small"></span>
   </div>
 
-  <h2>Matches on both sources (odds comparison)</h2>
+  <h2>Matches on both sources (comparison)</h2>
   <table id="overlap-table">
     <thead>
       <tr>
+        <th>Sport</th>
         <th>Match ID</th>
         <th>Match</th>
-        <th>PS3838 Home</th>
-        <th>e-stave Home</th>
-        <th>Edge % (e-stave vs PS)</th>
-        <th>Better Source</th>
+        <th>PS H</th>
+        <th>PS D</th>
+        <th>PS A</th>
+        <th>ES H</th>
+        <th>ES D</th>
+        <th>ES A</th>
+        <th>Edge H % (ES vs PS)</th>
+        <th>Better (H)</th>
         <th>Kickoff (UTC)</th>
       </tr>
     </thead>
@@ -95,11 +95,14 @@ def dashboard() -> str:
   <table id="ps-table">
     <thead>
       <tr>
+        <th>Sport</th>
         <th>Match ID</th>
         <th>External ID</th>
         <th>Match</th>
         <th>League</th>
-        <th>Home Odds</th>
+        <th>Home</th>
+        <th>Draw</th>
+        <th>Away</th>
         <th>Kickoff (UTC)</th>
         <th>Last Scraped</th>
       </tr>
@@ -111,11 +114,14 @@ def dashboard() -> str:
   <table id="es-table">
     <thead>
       <tr>
+        <th>Sport</th>
         <th>Match ID</th>
         <th>External ID</th>
         <th>Match</th>
         <th>League</th>
-        <th>Home Odds</th>
+        <th>Home</th>
+        <th>Draw</th>
+        <th>Away</th>
         <th>Kickoff (UTC)</th>
         <th>Last Scraped</th>
       </tr>
@@ -149,13 +155,17 @@ def dashboard() -> str:
       for (const row of rows) {
         const tr = document.createElement("tr");
         tr.innerHTML = `
+          <td>${row.sport ?? "-"}</td>
           <td>${row.canonical_match_id}</td>
           <td>${row.external_event_id}</td>
           <td>${row.home_team} vs ${row.away_team}</td>
           <td>${row.league ?? "-"}</td>
           <td>${row.latest_home_odds ?? "-"}</td>
+          <td>${row.latest_draw_odds ?? "-"}</td>
+          <td>${row.latest_away_odds ?? "-"}</td>
           <td>${row.kickoff_utc ?? "-"}</td>
-          <td>${row.last_scraped_at ?? "-"}</td>`;
+          <td>${row.last_scraped_at ?? "-"}</td>
+        `;
         tbody.appendChild(tr);
       }
     }
@@ -164,17 +174,23 @@ def dashboard() -> str:
       const tbody = document.querySelector("#overlap-table tbody");
       tbody.innerHTML = "";
       for (const row of rows) {
-        const edge = row.edge_pct_estave_vs_ps3838;
+        const edge = row.edge_pct_estave_vs_ps3838_home;
         const edgeClass = edge == null ? "" : (edge >= 0 ? "positive" : "negative");
         const tr = document.createElement("tr");
         tr.innerHTML = `
+          <td>${row.sport ?? "-"}</td>
           <td>${row.canonical_match_id}</td>
           <td>${row.home_team} vs ${row.away_team}</td>
           <td>${row.ps3838_home_odds ?? "-"}</td>
+          <td>${row.ps3838_draw_odds ?? "-"}</td>
+          <td>${row.ps3838_away_odds ?? "-"}</td>
           <td>${row.estave_home_odds ?? "-"}</td>
+          <td>${row.estave_draw_odds ?? "-"}</td>
+          <td>${row.estave_away_odds ?? "-"}</td>
           <td class="${edgeClass}">${edge == null ? "-" : edge.toFixed(2) + "%"}</td>
-          <td>${row.better_source ?? "-"}</td>
-          <td>${row.kickoff_utc ?? "-"}</td>`;
+          <td>${row.better_source_home ?? "-"}</td>
+          <td>${row.kickoff_utc ?? "-"}</td>
+        `;
         tbody.appendChild(tr);
       }
     }
@@ -188,17 +204,18 @@ def dashboard() -> str:
           <td>${row.created_at}</td>
           <td>${row.alert_type}</td>
           <td>${row.home_team} vs ${row.away_team}</td>
-          <td>${row.message}</td>`;
+          <td>${row.message}</td>
+        `;
         tbody.appendChild(tr);
       }
     }
 
     async function refresh() {
       const [overlap, psRows, esRows, alerts] = await Promise.all([
-        fetchJson("/matches/overlap?limit=120"),
-        fetchJson("/matches/source/ps3838?limit=120"),
-        fetchJson("/matches/source/e_stave?limit=120"),
-        fetchJson("/alerts/recent?limit=80")
+        fetchJson("/matches/overlap?limit=200"),
+        fetchJson("/matches/source/ps3838?limit=300"),
+        fetchJson("/matches/source/e_stave?limit=300"),
+        fetchJson("/alerts/recent?limit=80"),
       ]);
       renderOverlapTable(overlap);
       renderSourceTable("ps-table", psRows);
@@ -211,7 +228,7 @@ def dashboard() -> str:
       status.textContent = "Refreshing sources...";
       try {
         const out = await fetchJson("/admin/force-refresh", { method: "POST" });
-        status.textContent = `Done: quotes ps=${out.ps3838_quotes}, es=${out.estave_quotes}, alerts=${out.total_alerts_created}`;
+        status.textContent = `Done: ps=${out.ps3838_quotes}, es=${out.estave_quotes}, alerts=${out.total_alerts_created}`;
         await refresh();
       } catch (err) {
         status.textContent = `Force refresh failed: ${err}`;
@@ -254,7 +271,9 @@ def recent_matches(limit: int = 50, db: Session = Depends(get_db)) -> list[Match
 
 
 @app.get("/matches/source/{source}", response_model=list[SourceMatchRow])
-def matches_by_source(source: str, limit: int = 100, db: Session = Depends(get_db)) -> list[SourceMatchRow]:
+def matches_by_source(
+    source: str, limit: int = 100, db: Session = Depends(get_db)
+) -> list[SourceMatchRow]:
     if source not in {"ps3838", "e_stave"}:
         raise HTTPException(status_code=400, detail="source must be ps3838 or e_stave")
     return list_source_matches(db, source=source, limit=limit)

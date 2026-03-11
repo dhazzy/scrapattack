@@ -19,6 +19,10 @@ DIAGNOSTIC_OVERRIDE_FIELDS = {
     "ps3838_browser_only",
     "ps3838_enable_stealth",
     "ps3838_retry_count",
+    "ps3838_zenrows_api_key",
+    "ps3838_scrapingbee_api_key",
+    "vodds_username",
+    "vodds_password",
 }
 
 
@@ -291,7 +295,7 @@ async def run_ps3838_diagnostics(settings: Settings) -> dict[str, Any]:
         "checked_at_utc": datetime.now(timezone.utc).isoformat(),
         "target_url": settings.ps3838_soccer_url,
         "config": {
-                        "scraper_enable_playwright": settings.scraper_enable_playwright,
+            "scraper_enable_playwright": settings.scraper_enable_playwright,
             "ps3838_browser_only": settings.ps3838_browser_only,
             "ps3838_enable_stealth": settings.ps3838_enable_stealth,
             "ps3838_retry_count": settings.ps3838_retry_count,

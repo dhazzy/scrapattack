@@ -33,12 +33,22 @@ class Settings(BaseSettings):
     ps3838_zenrows_api_key: str = Field(default="", alias="PS3838_ZENROWS_API_KEY")
     ps3838_scrapingbee_api_key: str = Field(default="", alias="PS3838_SCRAPINGBEE_API_KEY")
 
+    vodds_dashboard_url: str = Field(
+        default="https://vodds.com/member/dashboard", alias="VODDS_DASHBOARD_URL"
+    )
+    vodds_username: str = Field(default="", alias="VODDS_USERNAME")
+    vodds_password: str = Field(default="", alias="VODDS_PASSWORD")
+    vodds_headless: bool = Field(default=True, alias="VODDS_HEADLESS")
+    vodds_timeout_sec: float = Field(default=60.0, alias="VODDS_TIMEOUT_SEC")
+
     estave_soccer_url: str = Field(
         default="https://www.e-stave.com/stave", alias="ESTAVE_SOCCER_URL"
     )
+    estave_page_size: int = Field(default=25, alias="ESTAVE_PAGE_SIZE")
+    estave_max_pages_per_query: int = Field(default=40, alias="ESTAVE_MAX_PAGES_PER_QUERY")
 
     scraper_request_timeout_sec: float = Field(default=30.0, alias="SCRAPER_REQUEST_TIMEOUT_SEC")
-    scraper_enable_playwright: bool = Field(default=False, alias="SCRAPER_ENABLE_PLAYWRIGHT")
+    scraper_enable_playwright: bool = Field(default=True, alias="SCRAPER_ENABLE_PLAYWRIGHT")
     scraper_proxy_url: str = Field(default="", alias="SCRAPER_PROXY_URL")
     scrape_interval_sec: int = Field(default=300, alias="SCRAPE_INTERVAL_SEC")
     compare_interval_sec: int = Field(default=300, alias="COMPARE_INTERVAL_SEC")
