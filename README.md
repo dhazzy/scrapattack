@@ -101,6 +101,7 @@ make smoke
 - `GET /alerts/recent?limit=50`
 - `GET /matches/recent?limit=50`
 - `POST /admin/run-once?simulate_drop=false`
+- `GET /admin/diagnostics/ps3838`
 
 ## DB table check
 
@@ -113,3 +114,19 @@ Expected key tables:
 - `alerts`
 - `canonical_matches`
 - `source_events`
+
+
+## PS3838 diagnostics endpoint
+
+Run:
+
+```bash
+curl http://localhost:8000/admin/diagnostics/ps3838
+```
+
+It reports each bypass layer separately:
+- proxy reachability
+- direct HTML access
+- Playwright navigation behavior
+- extraction quote count
+- recommended next tuning steps

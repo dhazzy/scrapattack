@@ -16,6 +16,7 @@ from odds_app.schemas import (
     RunOnceResponse,
 )
 from odds_app.services.match_views import list_recent_matches
+from odds_app.services.diagnostics import run_ps3838_diagnostics_sync
 from odds_app.services.orchestrator import run_pipeline_once
 
 settings = get_settings()
@@ -191,3 +192,8 @@ def recent_matches(limit: int = 50, db: Session = Depends(get_db)) -> list[Match
 @app.post("/admin/run-once", response_model=RunOnceResponse)
 def admin_run_once(simulate_drop: bool = False, db: Session = Depends(get_db)) -> dict:
     return run_pipeline_once(db, simulate_drop=simulate_drop)
+
+
+@app.get("/admin/diagnostics/ps3838")
+def admin_ps3838_diagnostics() -> dict:
+    return run_ps3838_diagnostics_sync(settings)
