@@ -1,6 +1,6 @@
 import time
 
-from fastapi import Body, Depends, FastAPI
+from fastapi import Body, Depends, FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -13,11 +13,17 @@ from odds_app.schemas import (
     HealthResponse,
     MatchSummaryResponse,
     OddsSnapshotResponse,
-    RunOnceResponse,
+    OverlapMatchRow,
     PS3838DiagnosticsOverrides,
+    RunOnceResponse,
+    SourceMatchRow,
 )
-from odds_app.services.match_views import list_recent_matches
 from odds_app.services.diagnostics import run_ps3838_diagnostics_sync
+from odds_app.services.match_views import (
+    list_overlap_matches,
+    list_recent_matches,
+    list_source_matches,
+)
 from odds_app.services.orchestrator import run_pipeline_once
 
 settings = get_settings()
@@ -49,6 +55,7 @@ def dashboard() -> str:
   <style>
     body { font-family: Arial, sans-serif; margin: 20px; background: #f7f7f7; }
     h1 { margin-bottom: 6px; }
+    h2 { margin-top: 30px; }
     .meta { color: #555; margin-bottom: 18px; }
     button { padding: 8px 12px; margin-right: 10px; }
     table { border-collapse: collapse; width: 100%; background: white; margin-bottom: 24px; }
@@ -56,33 +63,68 @@ def dashboard() -> str:
     th { background: #111; color: white; text-align: left; }
     .small { color: #666; font-size: 12px; }
     .box { margin-bottom: 18px; }
-    code { background: #efefef; padding: 1px 4px; border-radius: 4px; }
+    .positive { color: #0b7a0b; font-weight: bold; }
+    .negative { color: #b20000; font-weight: bold; }
   </style>
 </head>
 <body>
   <h1>Soccer Odds Dashboard</h1>
-  <div class="meta">Live view of canonical matches (shared IDs) and recent alerts.</div>
+  <div class="meta">Separate source tables + overlapping matches odds comparison.</div>
   <div class="box">
     <button onclick="runOnce(false)">Run once</button>
     <button onclick="runOnce(true)">Run once + simulate drop</button>
     <span id="run-status" class="small"></span>
   </div>
 
-  <h2>Matches</h2>
-  <table id="matches-table">
+  <h2>Matches on both sources (odds comparison)</h2>
+  <table id="overlap-table">
     <thead>
       <tr>
         <th>Match ID</th>
         <th>Match</th>
-        <th>Kickoff Bucket (UTC)</th>
-        <th>Source Events</th>
-        <th>Updated</th>
+        <th>PS3838 Home</th>
+        <th>e-stave Home</th>
+        <th>Edge % (e-stave vs PS)</th>
+        <th>Better Source</th>
+        <th>Kickoff (UTC)</th>
       </tr>
     </thead>
     <tbody></tbody>
   </table>
 
-  <h2>Recent Alerts</h2>
+  <h2>PS3838 matches</h2>
+  <table id="ps-table">
+    <thead>
+      <tr>
+        <th>Match ID</th>
+        <th>External ID</th>
+        <th>Match</th>
+        <th>League</th>
+        <th>Home Odds</th>
+        <th>Kickoff (UTC)</th>
+        <th>Last Scraped</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+
+  <h2>e-stave matches</h2>
+  <table id="es-table">
+    <thead>
+      <tr>
+        <th>Match ID</th>
+        <th>External ID</th>
+        <th>Match</th>
+        <th>League</th>
+        <th>Home Odds</th>
+        <th>Kickoff (UTC)</th>
+        <th>Last Scraped</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+
+  <h2>Recent alerts</h2>
   <table id="alerts-table">
     <thead>
       <tr>
@@ -102,20 +144,38 @@ def dashboard() -> str:
       return await res.json();
     }
 
-    function renderMatches(rows) {
-      const tbody = document.querySelector("#matches-table tbody");
+    function renderSourceTable(tableId, rows) {
+      const tbody = document.querySelector(`#${tableId} tbody`);
       tbody.innerHTML = "";
       for (const row of rows) {
-        const eventLines = row.source_events.map(ev =>
-          `<div><code>${ev.source}</code> id=${ev.external_event_id} home_odds=${ev.latest_home_odds ?? "-"} <span class="small">${ev.last_scraped_at ?? ""}</span></div>`
-        ).join("");
         const tr = document.createElement("tr");
         tr.innerHTML = `
-          <td>${row.match_id}</td>
+          <td>${row.canonical_match_id}</td>
+          <td>${row.external_event_id}</td>
           <td>${row.home_team} vs ${row.away_team}</td>
-          <td>${row.kickoff_bucket_utc ?? "unknown"}</td>
-          <td>${eventLines || "-"}</td>
-          <td>${row.updated_at}</td>`;
+          <td>${row.league ?? "-"}</td>
+          <td>${row.latest_home_odds ?? "-"}</td>
+          <td>${row.kickoff_utc ?? "-"}</td>
+          <td>${row.last_scraped_at ?? "-"}</td>`;
+        tbody.appendChild(tr);
+      }
+    }
+
+    function renderOverlapTable(rows) {
+      const tbody = document.querySelector("#overlap-table tbody");
+      tbody.innerHTML = "";
+      for (const row of rows) {
+        const edge = row.edge_pct_estave_vs_ps3838;
+        const edgeClass = edge == null ? "" : (edge >= 0 ? "positive" : "negative");
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>${row.canonical_match_id}</td>
+          <td>${row.home_team} vs ${row.away_team}</td>
+          <td>${row.ps3838_home_odds ?? "-"}</td>
+          <td>${row.estave_home_odds ?? "-"}</td>
+          <td class="${edgeClass}">${edge == null ? "-" : edge.toFixed(2) + "%"}</td>
+          <td>${row.better_source ?? "-"}</td>
+          <td>${row.kickoff_utc ?? "-"}</td>`;
         tbody.appendChild(tr);
       }
     }
@@ -135,11 +195,15 @@ def dashboard() -> str:
     }
 
     async function refresh() {
-      const [matches, alerts] = await Promise.all([
-        fetchJson("/matches/recent?limit=80"),
+      const [overlap, psRows, esRows, alerts] = await Promise.all([
+        fetchJson("/matches/overlap?limit=120"),
+        fetchJson("/matches/source/ps3838?limit=120"),
+        fetchJson("/matches/source/e_stave?limit=120"),
         fetchJson("/alerts/recent?limit=80")
       ]);
-      renderMatches(matches);
+      renderOverlapTable(overlap);
+      renderSourceTable("ps-table", psRows);
+      renderSourceTable("es-table", esRows);
       renderAlerts(alerts);
     }
 
@@ -188,6 +252,18 @@ def recent_odds(limit: int = 50, db: Session = Depends(get_db)) -> list[OddsSnap
 @app.get("/matches/recent", response_model=list[MatchSummaryResponse])
 def recent_matches(limit: int = 50, db: Session = Depends(get_db)) -> list[MatchSummaryResponse]:
     return list_recent_matches(db, limit=limit)
+
+
+@app.get("/matches/source/{source}", response_model=list[SourceMatchRow])
+def matches_by_source(source: str, limit: int = 100, db: Session = Depends(get_db)) -> list[SourceMatchRow]:
+    if source not in {"ps3838", "e_stave"}:
+        raise HTTPException(status_code=400, detail="source must be ps3838 or e_stave")
+    return list_source_matches(db, source=source, limit=limit)
+
+
+@app.get("/matches/overlap", response_model=list[OverlapMatchRow])
+def overlap_matches(limit: int = 100, db: Session = Depends(get_db)) -> list[OverlapMatchRow]:
+    return list_overlap_matches(db, limit=limit)
 
 
 @app.post("/admin/run-once", response_model=RunOnceResponse)

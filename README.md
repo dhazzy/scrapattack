@@ -1,6 +1,6 @@
 # scrapattack
 
-24/7 soccer odds scraping, cross-source matching, and alerting.
+24/7 soccer odds scraping, cross-source matching, and alerting with separate source tables and overlap comparison UI.
 
 ## What is implemented
 
@@ -100,6 +100,8 @@ make smoke
 - `GET /odds/recent?limit=50`
 - `GET /alerts/recent?limit=50`
 - `GET /matches/recent?limit=50`
+- `GET /matches/source/{source}?limit=100` (`source` = `ps3838` or `e_stave`)
+- `GET /matches/overlap?limit=100`
 - `POST /admin/run-once?simulate_drop=false`
 - `GET /admin/diagnostics/ps3838`
 - `POST /admin/diagnostics/ps3838`

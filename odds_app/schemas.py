@@ -68,6 +68,33 @@ class MatchSummaryResponse(BaseModel):
     updated_at: datetime
 
 
+class SourceMatchRow(BaseModel):
+    canonical_match_id: int
+    source: str
+    external_event_id: str
+    home_team: str
+    away_team: str
+    league: str | None
+    kickoff_utc: datetime | None
+    latest_home_odds: Decimal | None
+    last_scraped_at: datetime | None
+    updated_at: datetime
+
+
+class OverlapMatchRow(BaseModel):
+    canonical_match_id: int
+    home_team: str
+    away_team: str
+    kickoff_utc: datetime | None
+    ps3838_event_id: str
+    estave_event_id: str
+    ps3838_home_odds: Decimal | None
+    estave_home_odds: Decimal | None
+    edge_pct_estave_vs_ps3838: float | None
+    better_source: str | None
+    updated_at: datetime
+
+
 class PS3838DiagnosticsOverrides(BaseModel):
     scraper_enable_playwright: bool | None = None
     scraper_request_timeout_sec: float | None = None
