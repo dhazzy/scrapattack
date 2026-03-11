@@ -49,3 +49,20 @@ class OddsSnapshotResponse(BaseModel):
     scraped_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class SourceEventSummary(BaseModel):
+    source: str
+    external_event_id: str
+    league: str | None
+    latest_home_odds: Decimal | None
+    last_scraped_at: datetime | None
+
+
+class MatchSummaryResponse(BaseModel):
+    match_id: int
+    home_team: str
+    away_team: str
+    kickoff_bucket_utc: datetime | None
+    source_events: list[SourceEventSummary]
+    updated_at: datetime

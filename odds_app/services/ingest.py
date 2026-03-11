@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from odds_app.config import get_settings
 from odds_app.models import Alert, OddsSnapshot
 from odds_app.scrapers.base import OddsQuote
+from odds_app.services.matching import resolve_source_event_mapping
 
 
 def _pct_drop(old: Decimal, new: Decimal) -> float:
@@ -36,6 +37,7 @@ def persist_quotes_and_detect_drops(db: Session, quotes: list[OddsQuote]) -> int
     created_alerts = 0
 
     for quote in quotes:
+        canonical = resolve_source_event_mapping(db, quote)
         prev_stmt = (
             select(OddsSnapshot)
             .where(OddsSnapshot.source == quote.source)
@@ -89,6 +91,7 @@ def persist_quotes_and_detect_drops(db: Session, quotes: list[OddsQuote]) -> int
                     kickoff_utc=quote.kickoff_utc,
                     message=msg,
                     details={
+                        "canonical_match_id": canonical.id,
                         "previous_odds": str(previous.odds_decimal),
                         "current_odds": str(quote.odds_decimal),
                         "drop_pct": round(drop_pct, 4),

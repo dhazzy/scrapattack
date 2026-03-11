@@ -5,8 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from odds_app.config import get_settings
-from odds_app.models import Alert, OddsSnapshot
-from odds_app.utils.normalize import canonical_match_key
+from odds_app.models import Alert, CanonicalMatch, OddsSnapshot, SourceEvent
 
 
 def _edge_pct(base_odds: Decimal, alt_odds: Decimal) -> float:
@@ -15,33 +14,35 @@ def _edge_pct(base_odds: Decimal, alt_odds: Decimal) -> float:
     return float(((alt_odds - base_odds) / base_odds) * Decimal(100))
 
 
-def _kickoff_bucket(value: datetime | None) -> str:
-    if value is None:
-        return "unknown"
-    minute_bucket = (value.minute // 15) * 15
-    return value.replace(minute=minute_bucket, second=0, microsecond=0).isoformat()
-
-
 def _recent_value_alert_exists(
-    db: Session, home: str, away: str, market_type: str, selection: str, cooldown_min: int
+    db: Session, canonical_match_id: int, market_type: str, selection: str, cooldown_min: int
 ) -> bool:
     since = datetime.now(timezone.utc) - timedelta(minutes=cooldown_min)
     stmt = (
-        select(Alert.id)
+        select(Alert)
         .where(Alert.alert_type == "value_edge")
-        .where(Alert.home_team == home)
-        .where(Alert.away_team == away)
         .where(Alert.market_type == market_type)
         .where(Alert.selection == selection)
         .where(Alert.created_at >= since)
-        .limit(1)
+        .order_by(Alert.created_at.desc())
+        .limit(20)
     )
-    return db.scalar(stmt) is not None
+    candidates = list(db.scalars(stmt))
+    for candidate in candidates:
+        if int(candidate.details.get("canonical_match_id", -1)) == canonical_match_id:
+            return True
+    return False
 
 
 def scan_value_edges(db: Session) -> int:
     settings = get_settings()
     since = datetime.now(timezone.utc) - timedelta(minutes=90)
+
+    source_events = list(db.scalars(select(SourceEvent)))
+    event_map = {(item.source, item.external_event_id): item for item in source_events}
+    if not event_map:
+        return 0
+
     stmt = (
         select(OddsSnapshot)
         .where(OddsSnapshot.sport == "soccer")
@@ -51,16 +52,18 @@ def scan_value_edges(db: Session) -> int:
     )
     snapshots = list(db.scalars(stmt))
 
-    latest: dict[tuple[str, str, str, str, str], dict[str, OddsSnapshot]] = {}
+    latest: dict[tuple[int, str, str], dict[str, OddsSnapshot]] = {}
     for snap in snapshots:
-        home, away = canonical_match_key(snap.home_team, snap.away_team)
-        key = (home, away, snap.market_type, snap.selection, _kickoff_bucket(snap.kickoff_utc))
+        source_event = event_map.get((snap.source, snap.external_event_id))
+        if not source_event:
+            continue
+        key = (source_event.canonical_match_id, snap.market_type, snap.selection)
         src_map = latest.setdefault(key, {})
         if snap.source not in src_map:
             src_map[snap.source] = snap
 
     created_alerts = 0
-    for _, src_map in latest.items():
+    for (canonical_match_id, market_type, selection), src_map in latest.items():
         ps = src_map.get("ps3838")
         es = src_map.get("e_stave")
         if not (ps and es):
@@ -69,27 +72,31 @@ def scan_value_edges(db: Session) -> int:
         edge_pct = _edge_pct(ps.odds_decimal, es.odds_decimal)
         if edge_pct < settings.value_edge_threshold_pct:
             continue
-
         if _recent_value_alert_exists(
-            db, ps.home_team, ps.away_team, ps.market_type, ps.selection, settings.alert_cooldown_min
+            db, canonical_match_id, market_type, selection, settings.alert_cooldown_min
         ):
             continue
 
+        canonical = db.get(CanonicalMatch, canonical_match_id)
+        home = canonical.display_home_team if canonical else ps.home_team
+        away = canonical.display_away_team if canonical else ps.away_team
+
         msg = (
-            f"[VALUE EDGE] {ps.home_team} vs {ps.away_team} | {ps.market_type}:{ps.selection} "
+            f"[VALUE EDGE] {home} vs {away} | {market_type}:{selection} "
             f"ps3838={ps.odds_decimal} vs e-stave={es.odds_decimal} (edge {edge_pct:.2f}%)"
         )
         alert = Alert(
             alert_type="value_edge",
             source="comparison",
             sport="soccer",
-            market_type=ps.market_type,
-            selection=ps.selection,
-            home_team=ps.home_team,
-            away_team=ps.away_team,
+            market_type=market_type,
+            selection=selection,
+            home_team=home,
+            away_team=away,
             kickoff_utc=ps.kickoff_utc,
             message=msg,
             details={
+                "canonical_match_id": canonical_match_id,
                 "ps3838_odds": str(ps.odds_decimal),
                 "e_stave_odds": str(es.odds_decimal),
                 "edge_pct": round(edge_pct, 4),

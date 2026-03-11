@@ -28,6 +28,9 @@ class Settings(BaseSettings):
         default="https://www.e-stave.com/stave", alias="ESTAVE_SOCCER_URL"
     )
 
+    scraper_request_timeout_sec: float = Field(default=30.0, alias="SCRAPER_REQUEST_TIMEOUT_SEC")
+    scraper_enable_playwright: bool = Field(default=False, alias="SCRAPER_ENABLE_PLAYWRIGHT")
+
     odds_drop_threshold_pct: float = Field(default=8.0, alias="ODDS_DROP_THRESHOLD_PCT")
     odds_drop_lookback_min: int = Field(default=15, alias="ODDS_DROP_LOOKBACK_MIN")
     value_edge_threshold_pct: float = Field(default=4.0, alias="VALUE_EDGE_THRESHOLD_PCT")

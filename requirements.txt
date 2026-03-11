@@ -9,3 +9,5 @@ python-dotenv
 httpx
 beautifulsoup4
 lxml
+python-dateutil
+playwright

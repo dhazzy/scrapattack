@@ -1,118 +1,87 @@
 # scrapattack
 
-24/7 soccer odds scraping and alerting MVP.
+24/7 soccer odds scraping, cross-source matching, and alerting.
 
-## What is included
+## What is now implemented
 
-- FastAPI service (`odds_app.main`) with health + data inspection endpoints
-- Celery workers + Celery Beat scheduler
-- PostgreSQL persistence for odds snapshots + alert history
-- Redis broker/result backend for async jobs
-- Initial scraper adapters for:
-  - `https://www.ps3838.com/en/sports/soccer`
-  - `https://www.e-stave.com/stave`
-- Odds drop detector (same source, over time)
-- Cross-site value edge detector (`e-stave` vs `ps3838`)
-- Telegram notifier for alert delivery
+- FastAPI API + lightweight dashboard UI (`/`)
+- Celery worker + beat scheduler
+- PostgreSQL + Redis stack via Docker Compose
+- Odds snapshots (`odds_snapshots`)
+- Alerts (`alerts`)
+- Canonical match mapping:
+  - `canonical_matches` (internal shared match IDs)
+  - `source_events` (source event IDs mapped to canonical IDs)
+- Price drop detection
+- Cross-site value-edge detection (`ps3838` vs `e-stave`)
+- Telegram alert sender
 
-## Architecture
+## Why canonical IDs matter
 
-1. Scraper jobs run periodically (`beat`)
-2. Quotes are normalized and stored in `odds_snapshots`
-3. Price-drop logic creates `odds_drop` alerts
-4. Cross-bookmaker comparison creates `value_edge` alerts
-5. Alert dispatcher sends unsent alerts to Telegram
+`ps3838` and `e-stave` have different external event IDs.  
+The app now creates one internal match record (`canonical_matches.id`) and maps both source events into it (`source_events`), so both sites point to the same match ID.
 
-## Quick start
+## Parser mode
 
-1. Copy environment file:
-
-```bash
-cp .env.example .env
-```
-
-2. (Optional) set Telegram credentials in `.env`:
+### Mock mode (default)
 
 ```env
-TELEGRAM_BOT_TOKEN=...
-TELEGRAM_CHAT_ID=...
+USE_MOCK_SCRAPE_DATA=true
 ```
 
-3. Run stack:
-
-```bash
-docker compose up --build
-```
-
-4. Verify API:
-
-```bash
-curl http://localhost:8000/health
-curl http://localhost:8000/health/db
-curl http://localhost:8000/odds/recent
-curl http://localhost:8000/alerts/recent
-curl -X POST "http://localhost:8000/admin/run-once?simulate_drop=false"
-```
-
-5. Verify DB tables exist:
-
-```bash
-docker compose exec api python -m odds_app.check_db
-```
-
-Expected output includes:
-
-- `alerts`
-- `odds_snapshots`
-
-## Current parser status
-
-For safe local development, `USE_MOCK_SCRAPE_DATA=true` by default.  
-This generates deterministic soccer odds data so ingestion and alert flow work immediately.
-
-To scrape live pages, set:
+### Live extraction mode
 
 ```env
 USE_MOCK_SCRAPE_DATA=false
+SCRAPER_REQUEST_TIMEOUT_SEC=30
+SCRAPER_ENABLE_PLAYWRIGHT=false
 ```
 
-Then update selectors/API parsing in:
+Live extraction flow:
+1. Pull page HTML
+2. Parse embedded JSON/script payloads
+3. Optionally capture JSON XHR/fetch payloads with Playwright (`SCRAPER_ENABLE_PLAYWRIGHT=true`)
 
-- `odds_app/scrapers/ps3838.py`
-- `odds_app/scrapers/estave.py`
+> If Playwright mode is enabled, install browser binaries:
+>
+> ```bash
+> python -m playwright install chromium
+> ```
 
-Both scrapers currently look for generic HTML attributes (`data-event-id`, `data-odds`, etc.) and should be adapted to each site's real payload structure.
-
-## API endpoints
-
-- `GET /health`
-- `GET /health/db`
-- `GET /odds/recent?limit=50`
-- `GET /alerts/recent?limit=50`
-- `POST /admin/run-once?simulate_drop=false`
-
-## Useful make targets
+## Quick start
 
 ```bash
-make up
-make logs
+cp .env.example .env
+docker compose up --build
+```
+
+## Useful commands
+
+```bash
 make health
 make db-check
 make run-once
 make smoke
 ```
 
-## Troubleshooting startup
+## API endpoints
 
-- If services start before Postgres is ready, retries are built in (`DB_STARTUP_MAX_RETRIES` and `DB_STARTUP_RETRY_DELAY_SEC` in `.env`).
-- Inspect container logs:
+- `GET /` dashboard UI
+- `GET /health`
+- `GET /health/db`
+- `GET /odds/recent?limit=50`
+- `GET /alerts/recent?limit=50`
+- `GET /matches/recent?limit=50`
+- `POST /admin/run-once?simulate_drop=false`
+
+## DB table check
 
 ```bash
-docker compose logs -f api worker beat db redis
+docker compose exec api python -m odds_app.check_db
 ```
 
-## Legal and operational notes
-
-- Review each site's Terms of Service and applicable law before running 24/7 scraping.
-- Use rotating sessions/proxies if target sites apply anti-bot protections.
-- Keep historical records and evaluate strategy performance before placing real bets.
+Expected key tables:
+- `odds_snapshots`
+- `alerts`
+- `canonical_matches`
+- `source_events`
