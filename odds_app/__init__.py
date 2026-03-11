@@ -1,0 +1,1 @@
+"""Soccer odds watcher package."""
