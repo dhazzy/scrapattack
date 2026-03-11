@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     )
     vodds_username: str = Field(default="", alias="VODDS_USERNAME")
     vodds_password: str = Field(default="", alias="VODDS_PASSWORD")
+    vodds_proxy_url: str = Field(default="", alias="VODDS_PROXY_URL")
     vodds_headless: bool = Field(default=True, alias="VODDS_HEADLESS")
     vodds_timeout_sec: float = Field(default=60.0, alias="VODDS_TIMEOUT_SEC")
 

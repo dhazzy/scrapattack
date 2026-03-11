@@ -18,7 +18,7 @@ from odds_app.schemas import (
     RunOnceResponse,
     SourceMatchRow,
 )
-from odds_app.services.diagnostics import run_ps3838_diagnostics_sync
+from odds_app.services.diagnostics import run_ps3838_diagnostics_sync, run_vodds_diagnostics_sync
 from odds_app.services.match_views import list_overlap_matches, list_recent_matches, list_source_matches
 from odds_app.services.orchestrator import run_pipeline_once
 
@@ -304,3 +304,15 @@ def admin_ps3838_diagnostics_with_overrides(
     overrides: PS3838DiagnosticsOverrides = Body(default_factory=PS3838DiagnosticsOverrides),
 ) -> dict:
     return run_ps3838_diagnostics_sync(settings, overrides.model_dump(exclude_none=True))
+
+
+@app.get("/admin/diagnostics/vodds")
+def admin_vodds_diagnostics() -> dict:
+    return run_vodds_diagnostics_sync(settings)
+
+
+@app.post("/admin/diagnostics/vodds")
+def admin_vodds_diagnostics_with_overrides(
+    overrides: PS3838DiagnosticsOverrides = Body(default_factory=PS3838DiagnosticsOverrides),
+) -> dict:
+    return run_vodds_diagnostics_sync(settings, overrides.model_dump(exclude_none=True))

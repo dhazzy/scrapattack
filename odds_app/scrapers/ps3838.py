@@ -23,12 +23,19 @@ class PS3838Scraper:
     async def scrape_soccer(self) -> list[OddsQuote]:
         # Primary: scrape PS3838 odds via Vodds dashboard if credentials are configured.
         if self.settings.vodds_username and self.settings.vodds_password:
+            vodds_proxy = (
+                self.settings.vodds_proxy_url
+                or self.settings.ps3838_proxy_url
+                or self.settings.scraper_proxy_url
+                or None
+            )
             quotes = await scrape_ps3838_from_vodds(
                 dashboard_url=self.settings.vodds_dashboard_url,
                 username=self.settings.vodds_username,
                 password=self.settings.vodds_password,
                 headless=self.settings.vodds_headless,
                 timeout_sec=self.settings.vodds_timeout_sec,
+                proxy_url=vodds_proxy,
             )
             if quotes:
                 logger.info("PS3838 scraping via Vodds succeeded with %s quotes", len(quotes))

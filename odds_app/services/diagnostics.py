@@ -7,6 +7,7 @@ import httpx
 
 from odds_app.config import Settings
 from odds_app.scrapers.live_parser import DEFAULT_HEADERS, extract_live_quotes
+from odds_app.scrapers.vodds import diagnose_vodds_access
 
 
 DIAGNOSTIC_OVERRIDE_FIELDS = {
@@ -21,8 +22,12 @@ DIAGNOSTIC_OVERRIDE_FIELDS = {
     "ps3838_retry_count",
     "ps3838_zenrows_api_key",
     "ps3838_scrapingbee_api_key",
+    "vodds_dashboard_url",
     "vodds_username",
     "vodds_password",
+    "vodds_proxy_url",
+    "vodds_headless",
+    "vodds_timeout_sec",
 }
 
 
@@ -163,7 +168,6 @@ async def _probe_playwright_navigation(
                 timezone_id="UTC",
                 user_agent=headers.get("User-Agent", DEFAULT_HEADERS["User-Agent"]),
             )
-            # Don't inject Cookie header directly; use browser cookies instead.
             context_headers = {k: v for k, v in headers.items() if k.lower() != "cookie"}
             if context_headers:
                 await context.set_extra_http_headers(context_headers)
@@ -320,6 +324,46 @@ async def run_ps3838_diagnostics(settings: Settings) -> dict[str, Any]:
     }
 
 
+async def run_vodds_diagnostics(settings: Settings) -> dict[str, Any]:
+    proxy_url = (
+        settings.vodds_proxy_url
+        or settings.scraper_proxy_url
+        or settings.ps3838_proxy_url
+        or None
+    )
+    result = await diagnose_vodds_access(
+        dashboard_url=settings.vodds_dashboard_url,
+        username=settings.vodds_username,
+        password=settings.vodds_password,
+        headless=settings.vodds_headless,
+        timeout_sec=settings.vodds_timeout_sec,
+        proxy_url=proxy_url,
+    )
+
+    return {
+        "checked_at_utc": datetime.now(timezone.utc).isoformat(),
+        "target_url": settings.vodds_dashboard_url,
+        "config": {
+            "vodds_username_set": bool(settings.vodds_username),
+            "vodds_password_set": bool(settings.vodds_password),
+            "vodds_headless": settings.vodds_headless,
+            "vodds_timeout_sec": settings.vodds_timeout_sec,
+            "proxy_configured": bool(proxy_url),
+        },
+        "layers": {
+            "playwright_flow": result.get("summary"),
+            "error": result.get("error"),
+        },
+        "recommendations": result.get("recommendations", []),
+        "ok": bool(result.get("ok")),
+    }
+
+
 def run_ps3838_diagnostics_sync(settings: Settings, overrides: dict[str, Any] | None = None) -> dict[str, Any]:
     effective_settings = settings_with_overrides(settings, overrides)
     return asyncio.run(run_ps3838_diagnostics(effective_settings))
+
+
+def run_vodds_diagnostics_sync(settings: Settings, overrides: dict[str, Any] | None = None) -> dict[str, Any]:
+    effective_settings = settings_with_overrides(settings, overrides)
+    return asyncio.run(run_vodds_diagnostics(effective_settings))

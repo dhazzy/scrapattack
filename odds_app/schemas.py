@@ -121,5 +121,9 @@ class PS3838DiagnosticsOverrides(BaseModel):
     ps3838_retry_count: int | None = None
     ps3838_zenrows_api_key: str | None = None
     ps3838_scrapingbee_api_key: str | None = None
+    vodds_dashboard_url: str | None = None
     vodds_username: str | None = None
     vodds_password: str | None = None
+    vodds_proxy_url: str | None = None
+    vodds_headless: bool | None = None
+    vodds_timeout_sec: float | None = None

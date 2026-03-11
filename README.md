@@ -21,6 +21,7 @@
   - **matches on both sources** with odds comparison
   - Home/Draw/Away odds columns where available
 - PS3838 diagnostics endpoint (GET + POST overrides)
+- Vodds diagnostics endpoint (GET + POST overrides)
 - Force-refresh endpoint/button to scrape now
 
 ## Schedule (every 5 min)
@@ -56,6 +57,8 @@ UI:
 - `POST /admin/force-refresh`
 - `GET /admin/diagnostics/ps3838`
 - `POST /admin/diagnostics/ps3838`
+- `GET /admin/diagnostics/vodds`
+- `POST /admin/diagnostics/vodds`
 
 ## PS3838 access options
 
@@ -82,6 +85,7 @@ PS3838 via Vodds dashboard login (primary fallback path):
 VODDS_DASHBOARD_URL=https://vodds.com/member/dashboard
 VODDS_USERNAME=...
 VODDS_PASSWORD=...
+VODDS_PROXY_URL=http://user:pass@proxy-host:proxy-port
 VODDS_HEADLESS=true
 VODDS_TIMEOUT_SEC=60
 ```
@@ -125,4 +129,26 @@ docker compose up --build
 
 ```bash
 python -m playwright install chromium
+```
+
+
+## Vodds diagnostics
+
+Baseline:
+
+```bash
+curl http://localhost:8000/admin/diagnostics/vodds
+```
+
+Try overrides without restart:
+
+```bash
+curl -X POST http://localhost:8000/admin/diagnostics/vodds \
+  -H "Content-Type: application/json" \
+  -d '{
+    "vodds_username": "...",
+    "vodds_password": "...",
+    "vodds_proxy_url": "http://user:pass@proxy-host:proxy-port",
+    "vodds_headless": true
+  }'
 ```
