@@ -194,11 +194,13 @@ async def extract_live_quotes(
         except Exception as exc:
             logger.warning("Playwright extraction failed for %s: %s", source, exc)
 
-    html = await _fetch_page_html(url, timeout_sec=timeout_sec)
-    for payload in _extract_json_from_script_tags(html):
-        quotes.extend(_extract_quotes_from_json_blob(source, payload, now))
+    try:
+        html = await _fetch_page_html(url, timeout_sec=timeout_sec)
+        for payload in _extract_json_from_script_tags(html):
+            quotes.extend(_extract_quotes_from_json_blob(source, payload, now))
+    except Exception as exc:
+        logger.warning("HTML extraction failed for %s: %s", source, exc)
 
-    # Dedupe by source event id for stable ingestion.
     unique: dict[str, OddsQuote] = {}
     for quote in quotes:
         unique[quote.external_event_id] = quote

@@ -9,21 +9,21 @@ celery.conf.update(
     timezone="UTC",
     enable_utc=True,
     beat_schedule={
-        "scrape-ps3838-every-minute": {
+        "scrape-ps3838-every-5-min": {
             "task": "odds_app.tasks.scrape_ps3838_soccer",
-            "schedule": 60.0,
+            "schedule": float(settings.scrape_interval_sec),
         },
-        "scrape-estave-every-minute": {
+        "scrape-estave-every-5-min": {
             "task": "odds_app.tasks.scrape_estave_soccer",
-            "schedule": 60.0,
+            "schedule": float(settings.scrape_interval_sec),
         },
-        "run-value-comparison-every-2-minutes": {
+        "run-value-comparison-every-5-min": {
             "task": "odds_app.tasks.compare_value_edges",
-            "schedule": 120.0,
+            "schedule": float(settings.compare_interval_sec),
         },
-        "dispatch-alerts-every-30-seconds": {
+        "dispatch-alerts": {
             "task": "odds_app.tasks.dispatch_pending_alerts",
-            "schedule": 30.0,
+            "schedule": float(settings.alert_dispatch_interval_sec),
         },
     },
 )

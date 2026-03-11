@@ -30,6 +30,9 @@ class Settings(BaseSettings):
 
     scraper_request_timeout_sec: float = Field(default=30.0, alias="SCRAPER_REQUEST_TIMEOUT_SEC")
     scraper_enable_playwright: bool = Field(default=False, alias="SCRAPER_ENABLE_PLAYWRIGHT")
+    scrape_interval_sec: int = Field(default=300, alias="SCRAPE_INTERVAL_SEC")
+    compare_interval_sec: int = Field(default=300, alias="COMPARE_INTERVAL_SEC")
+    alert_dispatch_interval_sec: int = Field(default=30, alias="ALERT_DISPATCH_INTERVAL_SEC")
 
     odds_drop_threshold_pct: float = Field(default=8.0, alias="ODDS_DROP_THRESHOLD_PCT")
     odds_drop_lookback_min: int = Field(default=15, alias="ODDS_DROP_LOOKBACK_MIN")

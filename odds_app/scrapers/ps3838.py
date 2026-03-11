@@ -19,15 +19,19 @@ class PS3838Scraper:
         if self.settings.use_mock_scrape_data:
             return self._mock_quotes()
 
-        quotes = await extract_live_quotes(
-            source=self.source,
-            url=self.settings.ps3838_soccer_url,
-            timeout_sec=self.settings.scraper_request_timeout_sec,
-            enable_playwright=self.settings.scraper_enable_playwright,
-        )
+        try:
+            quotes = await extract_live_quotes(
+                source=self.source,
+                url=self.settings.ps3838_soccer_url,
+                timeout_sec=self.settings.scraper_request_timeout_sec,
+                enable_playwright=self.settings.scraper_enable_playwright,
+            )
+        except Exception as exc:
+            logger.warning("PS3838 live extraction error: %s", exc)
+            return []
+
         if not quotes:
-            logger.warning("No live PS3838 quotes parsed. Falling back to mock quotes.")
-            return self._mock_quotes()
+            logger.warning("No live PS3838 quotes parsed. Source may be blocked or selectors outdated.")
         return quotes
 
     def _mock_quotes(self) -> list[OddsQuote]:

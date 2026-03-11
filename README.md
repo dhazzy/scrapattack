@@ -2,7 +2,7 @@
 
 24/7 soccer odds scraping, cross-source matching, and alerting.
 
-## What is now implemented
+## What is implemented
 
 - FastAPI API + lightweight dashboard UI (`/`)
 - Celery worker + beat scheduler
@@ -16,20 +16,36 @@
 - Cross-site value-edge detection (`ps3838` vs `e-stave`)
 - Telegram alert sender
 
+## Scrape/compare cadence (5 minutes)
+
+Configured by env vars:
+
+```env
+SCRAPE_INTERVAL_SEC=300
+COMPARE_INTERVAL_SEC=300
+ALERT_DISPATCH_INTERVAL_SEC=30
+```
+
+This means:
+- ps3838 scrape every 5 min
+- e-stave scrape every 5 min
+- value comparison every 5 min
+- alert dispatch every 30 sec
+
 ## Why canonical IDs matter
 
-`ps3838` and `e-stave` have different external event IDs.  
-The app now creates one internal match record (`canonical_matches.id`) and maps both source events into it (`source_events`), so both sites point to the same match ID.
+`ps3838` and `e-stave` use different external event IDs.  
+The app creates one internal match (`canonical_matches.id`) and maps each source event into it (`source_events`), so same real-world match shares one ID.
 
 ## Parser mode
 
-### Mock mode (default)
+### Mock mode
 
 ```env
 USE_MOCK_SCRAPE_DATA=true
 ```
 
-### Live extraction mode
+### Live mode
 
 ```env
 USE_MOCK_SCRAPE_DATA=false
@@ -37,16 +53,16 @@ SCRAPER_REQUEST_TIMEOUT_SEC=30
 SCRAPER_ENABLE_PLAYWRIGHT=false
 ```
 
-Live extraction flow:
-1. Pull page HTML
-2. Parse embedded JSON/script payloads
-3. Optionally capture JSON XHR/fetch payloads with Playwright (`SCRAPER_ENABLE_PLAYWRIGHT=true`)
+### Source notes
 
-> If Playwright mode is enabled, install browser binaries:
->
-> ```bash
-> python -m playwright install chromium
-> ```
+- `e-stave`: scraper now uses the live mobile endpoint (`_MobileService.aspx`) and parses soccer events/odds.
+- `ps3838`: may return Cloudflare 403 from some server IPs. In that case no live quotes are returned (no mock fallback in live mode).
+
+If Playwright mode is enabled, install browser binaries:
+
+```bash
+python -m playwright install chromium
+```
 
 ## Quick start
 
