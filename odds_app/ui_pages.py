@@ -5,10 +5,27 @@ def render_admin_page() -> str:
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>Admin Control Center</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            void: '#05070f',
+            panel: '#0b1220',
+            line: '#25324d',
+          },
+          boxShadow: {
+            glow: '0 0 0 1px rgba(96,165,250,0.15), 0 10px 40px rgba(2,8,23,0.8)',
+          },
+        },
+      },
+    };
+  </script>
   <style>
     :root {
-      --bg: #0b1220;
-      --panel: #101a2e;
+      --bg: #05070f;
+      --panel: #0b1220;
       --panel-2: #0f1729;
       --text: #e5edf7;
       --muted: #9eb0c9;
@@ -21,7 +38,10 @@ def render_admin_page() -> str:
     body {
       margin: 0;
       font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-      background: radial-gradient(circle at top, #12203b, var(--bg) 45%);
+      background:
+        radial-gradient(circle at top, rgba(56, 189, 248, 0.16), transparent 40%),
+        radial-gradient(circle at 20% 20%, rgba(96, 165, 250, 0.12), transparent 35%),
+        var(--bg);
       color: var(--text);
       padding: 18px;
     }
@@ -32,16 +52,16 @@ def render_admin_page() -> str:
     a { color: #8dc0ff; text-decoration: none; }
     a:hover { text-decoration: underline; }
     .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; margin-bottom: 14px; }
-    .card { background: linear-gradient(180deg, var(--panel), var(--panel-2)); border: 1px solid var(--border); border-radius: 10px; padding: 12px; margin-bottom: 12px; }
+    .card { background: linear-gradient(180deg, rgba(11,18,32,0.88), rgba(15,23,41,0.88)); border: 1px solid var(--border); border-radius: 14px; padding: 12px; margin-bottom: 12px; box-shadow: 0 0 0 1px rgba(96,165,250,0.10), 0 15px 40px rgba(2,8,23,0.55); backdrop-filter: blur(4px); }
     .label { color: var(--muted); font-size: 12px; margin-bottom: 4px; }
     .value { font-size: 18px; font-weight: 700; }
     .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; align-items: center; }
-    button { border: 1px solid var(--border); background: #17305d; color: white; padding: 9px 12px; border-radius: 8px; cursor: pointer; font-weight: 600; }
+    button { border: 1px solid var(--border); background: linear-gradient(180deg, rgba(37,99,235,0.95), rgba(30,64,175,0.9)); color: white; padding: 9px 12px; border-radius: 10px; cursor: pointer; font-weight: 600; box-shadow: 0 0 0 1px rgba(96,165,250,0.2), 0 8px 22px rgba(2,8,23,0.55); }
     button:hover { filter: brightness(1.08); }
     button.danger { background: #532222; border-color: #7b2f2f; }
     .status { color: var(--muted); font-size: 12px; align-self: center; }
     .section-title { margin: 22px 0 8px; font-size: 18px; }
-    .table-wrap { border: 1px solid var(--border); border-radius: 10px; overflow: auto; background: var(--panel-2); margin-bottom: 18px; }
+    .table-wrap { border: 1px solid var(--border); border-radius: 14px; overflow: auto; background: rgba(15,23,41,0.72); backdrop-filter: blur(6px); margin-bottom: 18px; }
     .status-pill { border: 1px solid var(--border); border-radius: 999px; padding: 2px 8px; font-size: 11px; font-weight: 700; display: inline-block; }
     .status-good { color: #9df7bc; background: rgba(29, 191, 115, 0.18); border-color: rgba(29, 191, 115, 0.45); }
     .status-warn { color: #ffe5a0; background: rgba(242, 182, 58, 0.18); border-color: rgba(242, 182, 58, 0.45); }
@@ -78,7 +98,7 @@ def render_admin_page() -> str:
     .modal-backdrop {
       position: fixed;
       inset: 0;
-      background: rgba(0, 0, 0, 0.6);
+      background: rgba(2, 6, 23, 0.75);
       display: none;
       align-items: center;
       justify-content: center;
@@ -88,24 +108,26 @@ def render_admin_page() -> str:
     .modal-backdrop.show { display: flex; }
     .modal {
       width: min(520px, 100%);
-      background: linear-gradient(180deg, #15233f, #0f182a);
+      background: linear-gradient(180deg, rgba(21,35,63,0.97), rgba(15,24,42,0.96));
       border: 1px solid var(--border);
       border-radius: 12px;
       padding: 16px;
+      box-shadow: 0 0 0 1px rgba(96,165,250,0.12), 0 15px 60px rgba(2,8,23,0.65);
     }
     .modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
     #scrape-run-history-wrap { position: relative; width: 100%; height: 220px; }
     #scrape-run-history-canvas { width: 100% !important; height: 100% !important; display: block; }
   </style>
 </head>
-<body>
-<div class="container">
+<body class="min-h-screen bg-void text-slate-100 antialiased">
+<div class="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_top,rgba(56,189,248,0.14),transparent_45%)]"></div>
+<div class="container relative mx-auto max-w-[1500px] space-y-4">
   <div class="header">
     <div>
       <h1>Admin Control Center</h1>
       <div class="meta">Operations, diagnostics, reliability, probe testing, and runtime controls.</div>
     </div>
-    <div><a href="/markets">Open Markets & Alerts page</a></div>
+    <div><a href="/markets" class="rounded-xl border border-line bg-panel/60 px-4 py-2 text-sm text-cyan-300 shadow-glow transition hover:border-cyan-400 hover:text-cyan-200">Open Markets & Alerts page</a></div>
   </div>
 
   <div class="cards">
@@ -808,10 +830,27 @@ def render_markets_page() -> str:
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>Markets & Alerts</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            void: '#05070f',
+            panel: '#0b1220',
+            line: '#25324d',
+          },
+          boxShadow: {
+            glow: '0 0 0 1px rgba(96,165,250,0.15), 0 10px 40px rgba(2,8,23,0.8)',
+          },
+        },
+      },
+    };
+  </script>
   <style>
     :root {
-      --bg: #0b1220;
-      --panel: #101a2e;
+      --bg: #05070f;
+      --panel: #0b1220;
       --panel-2: #0f1729;
       --text: #e5edf7;
       --muted: #9eb0c9;
@@ -824,7 +863,10 @@ def render_markets_page() -> str:
     body {
       margin: 0;
       font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-      background: radial-gradient(circle at top, #12203b, var(--bg) 45%);
+      background:
+        radial-gradient(circle at top, rgba(56, 189, 248, 0.16), transparent 40%),
+        radial-gradient(circle at 20% 20%, rgba(96, 165, 250, 0.12), transparent 35%),
+        var(--bg);
       color: var(--text);
       padding: 18px;
     }
@@ -835,11 +877,11 @@ def render_markets_page() -> str:
     a { color: #8dc0ff; text-decoration: none; }
     a:hover { text-decoration: underline; }
     .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; align-items: center; }
-    button { border: 1px solid var(--border); background: #17305d; color: white; padding: 9px 12px; border-radius: 8px; cursor: pointer; font-weight: 600; }
+    button { border: 1px solid var(--border); background: linear-gradient(180deg, rgba(37,99,235,0.95), rgba(30,64,175,0.9)); color: white; padding: 9px 12px; border-radius: 10px; cursor: pointer; font-weight: 600; box-shadow: 0 0 0 1px rgba(96,165,250,0.2), 0 8px 22px rgba(2,8,23,0.55); }
     button:hover { filter: brightness(1.08); }
     .status { color: var(--muted); font-size: 12px; align-self: center; }
     .section-title { margin: 22px 0 8px; font-size: 18px; }
-    .table-wrap { border: 1px solid var(--border); border-radius: 10px; overflow: auto; background: var(--panel-2); margin-bottom: 18px; }
+    .table-wrap { border: 1px solid var(--border); border-radius: 14px; overflow: auto; background: rgba(15,23,41,0.72); backdrop-filter: blur(6px); margin-bottom: 18px; }
     table { border-collapse: collapse; width: 100%; min-width: 980px; }
     th, td { border-bottom: 1px solid #1f2f4d; padding: 8px; font-size: 12px; vertical-align: top; white-space: nowrap; }
     th { background: var(--table-head); text-align: left; position: sticky; top: 0; z-index: 1; }
@@ -850,21 +892,22 @@ def render_markets_page() -> str:
     .spark-tag { width: 18px; font-size: 10px; color: var(--muted); }
     .positive { color: var(--success); font-weight: 700; }
     .negative { color: var(--danger); font-weight: 700; }
-    .modal-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.6); display: none; align-items: center; justify-content: center; z-index: 1000; padding: 16px; }
+    .modal-backdrop { position: fixed; inset: 0; background: rgba(2, 6, 23, 0.75); display: none; align-items: center; justify-content: center; z-index: 1000; padding: 16px; backdrop-filter: blur(4px); }
     .modal-backdrop.show { display: flex; }
-    .modal { width: min(980px, 100%); background: linear-gradient(180deg, #15233f, #0f182a); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+    .modal { width: min(980px, 100%); background: linear-gradient(180deg, rgba(21,35,63,0.97), rgba(15,24,42,0.96)); border: 1px solid var(--border); border-radius: 14px; padding: 16px; box-shadow: 0 0 0 1px rgba(96,165,250,0.12), 0 15px 60px rgba(2,8,23,0.65); }
     #history-chart-wrap { position: relative; width: 100%; height: 320px; }
     #odds-history-canvas { width: 100% !important; height: 100% !important; display: block; }
   </style>
 </head>
-<body>
-<div class="container">
+<body class="min-h-screen bg-void text-slate-100 antialiased">
+<div class="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_top,rgba(56,189,248,0.14),transparent_45%)]"></div>
+<div class="container relative mx-auto max-w-[1500px] space-y-4">
   <div class="header">
     <div>
       <h1>Markets & Alerts</h1>
       <div class="meta">Match tables, overlap/edge view, and alerts.</div>
     </div>
-    <div><a href="/admin">Back to Admin</a></div>
+    <div><a href="/admin" class="rounded-xl border border-line bg-panel/60 px-4 py-2 text-sm text-cyan-300 shadow-glow transition hover:border-cyan-400 hover:text-cyan-200">Back to Admin</a></div>
   </div>
 
   <div class="actions">
