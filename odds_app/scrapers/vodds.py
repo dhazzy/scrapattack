@@ -1,5 +1,8 @@
+import hashlib
 import logging
+import re
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any
 
 from odds_app.scrapers.base import OddsQuote
@@ -9,6 +12,37 @@ logger = logging.getLogger(__name__)
 
 SPORTS = ["Football", "Tennis", "Basketball"]
 LOGIN_BUTTON_LABELS = ["Login", "Sign In", "Log In", "Submit"]
+MENU_TOKENS = {
+    "ODDS Scanner",
+    "PSPORTS",
+    "Live Casino",
+    "Slots and Games",
+    "Virtual Sports",
+    "Currency",
+    "Odd format",
+    "Football",
+    "Tennis",
+    "Basketball",
+    "Watch List",
+    "DEPOSIT",
+    "FAVOURITE",
+    "LIVE",
+    "TODAY",
+    "EARLY",
+    "FT",
+    "Time",
+    "Match",
+    "Type",
+    "HDP",
+    "Home",
+    "Away",
+    "OU",
+    "Over",
+    "Under",
+}
+DATE_RE = re.compile(r"^[A-Za-z]{3}-\d{1,2},\s*\d{2}:\d{2}$")
+MATCH_RE = re.compile(r"^(.+?)\s+vs\s+(.+)$", re.IGNORECASE)
+ODDS_RE = re.compile(r"^\d{1,2}\.\d{2,3}$")
 
 
 def _normalize_sport(label: str) -> str:
@@ -57,6 +91,141 @@ def _is_cloudflare_challenge(title: str, html: str, url: str) -> bool:
     )
 
 
+def _clean_lines(text: str) -> list[str]:
+    lines = []
+    for raw in text.splitlines():
+        ln = raw.replace("\xa0", " ").strip()
+        if not ln:
+            continue
+        lines.append(ln)
+    return lines
+
+
+def _parse_kickoff(line: str, now: datetime) -> datetime | None:
+    if not DATE_RE.match(line):
+        return None
+    try:
+        dt = datetime.strptime(f"{line} {now.year}", "%b-%d, %H:%M %Y")
+        dt = dt.replace(tzinfo=timezone.utc)
+        if dt < now.replace(month=1, day=1):
+            return dt
+        # If crossing year-end, move early-month dates to next year.
+        if (now.month >= 11) and (dt.month <= 2) and (dt < now - now.utcoffset() if now.utcoffset() else dt < now):
+            dt = dt.replace(year=now.year + 1)
+        return dt
+    except Exception:
+        return None
+
+
+def _looks_like_league(line: str) -> bool:
+    if line in MENU_TOKENS:
+        return False
+    if DATE_RE.match(line):
+        return False
+    if MATCH_RE.match(line):
+        return False
+    if ODDS_RE.match(line):
+        return False
+    if line.startswith("+") or line.startswith("-"):
+        return False
+    return " - " in line and any(ch.isalpha() for ch in line)
+
+
+def _make_external_id(sport: str, league: str | None, home: str, away: str, kickoff: datetime | None) -> str:
+    key = f"{sport}|{league or ''}|{home}|{away}|{kickoff.isoformat() if kickoff else ''}"
+    return hashlib.md5(key.encode("utf-8")).hexdigest()[:16]
+
+
+def _extract_quotes_from_dashboard_text(source: str, sport_label: str, text: str) -> list[OddsQuote]:
+    sport = _normalize_sport(sport_label)
+    now = datetime.now(timezone.utc)
+    lines = _clean_lines(text)
+
+    # Start from the table header if present.
+    start_idx = 0
+    for i, ln in enumerate(lines):
+        if ln == "Time" and i + 5 < len(lines) and "Match" in lines[i + 1 : i + 8]:
+            start_idx = i
+            break
+
+    quotes: list[OddsQuote] = []
+    current_league: str | None = None
+    pending_kickoff: datetime | None = None
+
+    i = start_idx
+    while i < len(lines):
+        line = lines[i]
+
+        if _looks_like_league(line):
+            current_league = line
+            i += 1
+            continue
+
+        maybe_dt = _parse_kickoff(line, now)
+        if maybe_dt is not None:
+            pending_kickoff = maybe_dt
+            i += 1
+            continue
+
+        m = MATCH_RE.match(line)
+        if not m:
+            i += 1
+            continue
+
+        home = m.group(1).strip()
+        away = m.group(2).strip()
+        odds_values: list[Decimal] = []
+
+        j = i + 1
+        while j < len(lines) and (j - i) <= 18:
+            nxt = lines[j]
+            if MATCH_RE.match(nxt) or _parse_kickoff(nxt, now) is not None or _looks_like_league(nxt):
+                break
+            if ODDS_RE.match(nxt):
+                try:
+                    val = Decimal(nxt)
+                    if val > 1:
+                        odds_values.append(val)
+                except Exception:
+                    pass
+            j += 1
+
+        ext_id = _make_external_id(sport, current_league, home, away, pending_kickoff)
+
+        # Heuristic mapping from row tail:
+        # - Soccer usually exposes 3-way odds in this scanner row tail.
+        # - Tennis/Basketball are 2-way.
+        if sport == "soccer" and len(odds_values) >= 3:
+            tail = odds_values[-3:]
+            mapped = [("home", tail[0]), ("draw", tail[1]), ("away", tail[2])]
+        elif len(odds_values) >= 2:
+            tail = odds_values[-2:]
+            mapped = [("home", tail[0]), ("away", tail[1])]
+        else:
+            mapped = []
+
+        for selection, price in mapped:
+            quotes.append(
+                OddsQuote(
+                    source=source,
+                    sport=sport,
+                    league=current_league,
+                    external_event_id=ext_id,
+                    home_team=home,
+                    away_team=away,
+                    kickoff_utc=pending_kickoff,
+                    market_type="1x2",
+                    selection=selection,
+                    odds_decimal=price,
+                    scraped_at=now,
+                )
+            )
+
+        i = j
+
+    return quotes
+
+
 async def _collect_vodds_payloads(
     dashboard_url: str,
     username: str,
@@ -64,10 +233,11 @@ async def _collect_vodds_payloads(
     headless: bool,
     timeout_sec: float,
     proxy_url: str | None,
-) -> tuple[dict[str, Any], dict[str, list[Any]]]:
+) -> tuple[dict[str, Any], dict[str, list[Any]], dict[str, list[str]]]:
     from playwright.async_api import async_playwright
 
     payloads_by_sport: dict[str, list[Any]] = {sport: [] for sport in SPORTS}
+    dom_text_by_sport: dict[str, list[str]] = {sport: [] for sport in SPORTS}
     active_sport = {"value": "Football"}
     network_samples: list[dict[str, Any]] = []
     seen_urls: set[str] = set()
@@ -160,7 +330,6 @@ async def _collect_vodds_payloads(
         initial_challenge = _is_cloudflare_challenge(initial_title, initial_html[:20000], initial_url)
 
         if username and password:
-            # Main auth is in /static/login iframe.
             login_frame = None
             for frame in page.frames:
                 if "/static/login" in frame.url:
@@ -182,7 +351,7 @@ async def _collect_vodds_payloads(
                         login_button_clicked = True
                     else:
                         await frame_password.first.press("Enter")
-                    await page.wait_for_timeout(8000)
+                    await page.wait_for_timeout(9000)
 
             if not login_attempted and initial_login_form:
                 user_loc = page.locator(
@@ -201,7 +370,7 @@ async def _collect_vodds_payloads(
                             break
                     if not login_button_clicked:
                         await page.keyboard.press("Enter")
-                    await page.wait_for_timeout(6000)
+                    await page.wait_for_timeout(7000)
 
         post_login_title = await page.title()
         post_login_url = page.url
@@ -209,27 +378,49 @@ async def _collect_vodds_payloads(
         post_login_login_form = await page.locator('input[type="password"]').count() > 0
         post_login_challenge = _is_cloudflare_challenge(post_login_title, post_login_html[:20000], post_login_url)
 
+        # Remove tour/intro overlays that intercept click events.
+        await page.evaluate(
+            """
+            (() => {
+              for (const sel of ['.introjs-overlay', '.introjs-helperLayer', '.introjs-tooltipReferenceLayer']) {
+                for (const el of document.querySelectorAll(sel)) el.remove();
+              }
+              const skip = document.querySelector('.introjs-skipbutton');
+              if (skip) skip.click();
+            })();
+            """
+        )
+        await page.wait_for_timeout(500)
+
         for sport in SPORTS:
             active_sport["value"] = sport
-            sport_loc = page.get_by_text(sport, exact=False)
-            if await sport_loc.count() == 0:
-                continue
-            try:
-                await sport_loc.first.click(timeout=2000)
-                clicked_sports.append(sport)
-                await page.wait_for_timeout(1400)
-            except Exception:
-                continue
-            early_loc = page.get_by_text("EARLY", exact=False)
-            if await early_loc.count() > 0:
-                try:
-                    await early_loc.first.click(timeout=2000)
-                    clicked_early += 1
-                    await page.wait_for_timeout(1400)
-                except Exception:
-                    pass
+            # Direct DOM click is more reliable than pointer click when tutorial overlay exists.
+            await page.evaluate(
+                """
+                (sportName) => {
+                  const spans = [...document.querySelectorAll('.sport-cat-tabs li span')];
+                  const s = spans.find(e => (e.textContent || '').trim().toUpperCase() === sportName.toUpperCase());
+                  if (s) s.click();
+                  const pars = [...document.querySelectorAll('p')];
+                  const early = pars.find(e => (e.textContent || '').trim().toUpperCase() === 'EARLY');
+                  if (early) early.click();
+                }
+                """,
+                sport,
+            )
+            await page.wait_for_timeout(2800)
 
-        await page.wait_for_timeout(2500)
+            # DOM text snapshot fallback parser.
+            try:
+                dom_text = await page.inner_text('body')
+                if dom_text.strip():
+                    dom_text_by_sport[sport].append(dom_text)
+                    clicked_sports.append(sport)
+                    clicked_early += 1
+            except Exception:
+                pass
+
+        await page.wait_for_timeout(2000)
 
         final_title = await page.title()
         final_url = page.url
@@ -261,6 +452,7 @@ async def _collect_vodds_payloads(
             "ui": {
                 "clicked_sports": clicked_sports,
                 "clicked_early_count": clicked_early,
+                "dom_snapshot_counts": {k: len(v) for k, v in dom_text_by_sport.items()},
             },
             "network": {
                 "json_response_count": json_response_count,
@@ -273,7 +465,7 @@ async def _collect_vodds_payloads(
         await context.close()
         await browser.close()
 
-    return summary, payloads_by_sport
+    return summary, payloads_by_sport, dom_text_by_sport
 
 
 async def diagnose_vodds_access(
@@ -285,7 +477,7 @@ async def diagnose_vodds_access(
     proxy_url: str | None = None,
 ) -> dict[str, Any]:
     try:
-        summary, _ = await _collect_vodds_payloads(
+        summary, _, dom_text_by_sport = await _collect_vodds_payloads(
             dashboard_url=dashboard_url,
             username=username,
             password=password,
@@ -322,10 +514,16 @@ async def diagnose_vodds_access(
 
     if summary["post_login"]["login_attempted"] and "member/dashboard" not in summary["final"]["url"]:
         recommendations.append("Login submit happened but did not land on /member/dashboard.")
+
+    dom_counts = {k: len(v) for k, v in dom_text_by_sport.items()}
+    if not any(dom_counts.values()):
+        recommendations.append("No DOM snapshots captured after sport/EARLY clicks.")
+
     if summary["network"]["json_response_count"] == 0:
         recommendations.append("No JSON payloads captured from dashboard; odds API was not reached.")
+
     if not recommendations:
-        recommendations.append("Vodds navigation/login looks healthy; investigate payload parser if quotes remain zero.")
+        recommendations.append("Vodds navigation/login looks healthy; inspect payload/DOM parser if quotes remain zero.")
 
     login_success = "member/dashboard" in summary["final"]["url"]
     return {
@@ -344,7 +542,7 @@ async def scrape_ps3838_from_vodds(
     proxy_url: str | None = None,
 ) -> list[OddsQuote]:
     try:
-        summary, payloads_by_sport = await _collect_vodds_payloads(
+        summary, payloads_by_sport, dom_text_by_sport = await _collect_vodds_payloads(
             dashboard_url=dashboard_url,
             username=username,
             password=password,
@@ -365,6 +563,8 @@ async def scrape_ps3838_from_vodds(
 
     all_quotes: list[OddsQuote] = []
     seen: set[tuple[str, str, str]] = set()
+
+    # Primary attempt: payload-based extraction.
     for sport, payloads in payloads_by_sport.items():
         for payload in payloads:
             for quote in _extract_quotes_from_vodds_payload(payload, sport):
@@ -374,11 +574,20 @@ async def scrape_ps3838_from_vodds(
                 seen.add(key)
                 all_quotes.append(quote)
 
+    # Fallback: rendered DOM text extraction.
+    for sport, snapshots in dom_text_by_sport.items():
+        for snap in snapshots:
+            for quote in _extract_quotes_from_dashboard_text("ps3838", sport, snap):
+                key = (quote.external_event_id, quote.market_type, quote.selection)
+                if key in seen:
+                    continue
+                seen.add(key)
+                all_quotes.append(quote)
+
     if not all_quotes:
         logger.warning(
             "Vodds scrape produced no quotes (final_url=%s, json_responses=%s, clicked_sports=%s). "
-            "Dashboard odds appear to be delivered on websocket binary streams (BESTODD_STREAM/ODD_STREAM), "
-            "which are not decoded yet.",
+            "Dashboard odds may still require websocket binary decoding for complete coverage.",
             summary.get("final", {}).get("url"),
             summary.get("network", {}).get("json_response_count"),
             summary.get("ui", {}).get("clicked_sports"),
