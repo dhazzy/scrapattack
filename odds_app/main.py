@@ -462,7 +462,7 @@ def dashboard() -> str:
     const meta = document.getElementById('coverage-trend-meta');
     const tbody = document.querySelector('#coverage-trend-table tbody');
     const generated = payload.generated_at ? formatDateUtc(payload.generated_at) : '-';
-    meta.textContent = `generated=${generated} | hours=${payload.hours ?? 24} | bucket=${payload.bucket_minutes ?? 30}m`;
+    meta.textContent = `generated=${generated} | runs=${payload.runs ?? '-'} | hours=${payload.hours ?? 24} | bucket=${payload.bucket_minutes ?? 30}m`;
 
     tbody.innerHTML = '';
     for (const row of (payload.series ?? [])) {
@@ -619,7 +619,7 @@ def dashboard() -> str:
     const [schedule, coverage, coverageTrend, overlap, overlapTrends, psRows, esRows, oddsDropAlerts, alerts] = await Promise.all([
       fetchJson('/admin/next-scrape'),
       fetchJson('/admin/coverage'),
-      fetchJson('/admin/coverage-trend?hours=24&bucket_minutes=30'),
+      fetchJson('/admin/coverage-trend?runs=72&bucket_minutes=5'),
       fetchJson('/matches/overlap?limit=200'),
       fetchJson('/matches/overlap-trends?limit=200&hours=72&max_points=18'),
       fetchJson('/matches/source/ps3838?limit=300'),
@@ -1248,9 +1248,15 @@ def admin_coverage(db: Session = Depends(get_db)) -> dict:
 def admin_coverage_trend(
     hours: int = 24,
     bucket_minutes: int = 30,
+    runs: int | None = None,
     db: Session = Depends(get_db),
 ) -> dict:
-    return get_scrape_coverage_trend(db, hours=hours, bucket_minutes=bucket_minutes)
+    return get_scrape_coverage_trend(
+        db,
+        hours=hours,
+        bucket_minutes=bucket_minutes,
+        runs=runs,
+    )
 
 
 @app.post("/admin/clear-db")

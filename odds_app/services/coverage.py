@@ -115,6 +115,7 @@ def get_scrape_coverage_trend(
     sources: tuple[str, str] = DEFAULT_COMPARISON_SOURCES,
     hours: int = 24,
     bucket_minutes: int = 30,
+    runs: int | None = None,
 ) -> dict:
     now = datetime.now(timezone.utc)
     hours = max(1, hours)
@@ -162,20 +163,29 @@ def get_scrape_coverage_trend(
             if snap.scraped_at <= snap.kickoff_utc <= horizon_end:
                 future72_sets[snap.source][idx].add(snap.external_event_id)
 
+    runs_limit = max(1, int(runs)) if runs is not None else None
     series = []
     for source in sources:
+        event_counts = [len(s) for s in event_sets[source]]
+        future_72h_counts = [len(s) for s in future72_sets[source]]
+        if runs_limit is not None:
+            event_counts = event_counts[-runs_limit:]
+            future_72h_counts = future_72h_counts[-runs_limit:]
         series.append(
             {
                 "source": source,
-                "event_counts": [len(s) for s in event_sets[source]],
-                "future_72h_counts": [len(s) for s in future72_sets[source]],
+                "event_counts": event_counts,
+                "future_72h_counts": future_72h_counts,
             }
         )
+    if runs_limit is not None:
+        buckets = buckets[-runs_limit:]
 
     return {
         "generated_at": now.isoformat(),
         "hours": hours,
         "bucket_minutes": bucket_minutes,
+        "runs": runs_limit,
         "buckets": [bucket.isoformat() for bucket in buckets],
         "series": series,
     }
