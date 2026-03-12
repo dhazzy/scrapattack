@@ -45,8 +45,58 @@ def render_admin_page() -> str:
       color: var(--text);
       padding: 18px;
     }
+    .fx-grid {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background-image:
+        linear-gradient(rgba(96, 165, 250, 0.12) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(96, 165, 250, 0.12) 1px, transparent 1px);
+      background-size: 42px 42px;
+      mask-image: radial-gradient(circle at center, rgba(0, 0, 0, 0.58), transparent 78%);
+      opacity: 0.24;
+      animation: gridPulse 16s ease-in-out infinite;
+      z-index: 0;
+    }
+    .fx-noise {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background-image: radial-gradient(rgba(255, 255, 255, 0.055) 0.6px, transparent 0.6px);
+      background-size: 3px 3px;
+      opacity: 0.16;
+      mix-blend-mode: soft-light;
+      z-index: 0;
+    }
+    @keyframes gridPulse {
+      0%, 100% { opacity: 0.16; transform: translateY(0px); }
+      50% { opacity: 0.28; transform: translateY(1.5px); }
+    }
     .container { max-width: 1500px; margin: 0 auto; }
     .header { display: flex; justify-content: space-between; align-items: flex-start; gap: 14px; margin-bottom: 14px; flex-wrap: wrap; }
+    .top-nav {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    .top-link {
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 6px 12px;
+      font-size: 12px;
+      color: #9cc9ff;
+      background: rgba(11, 18, 32, 0.55);
+      text-decoration: none;
+      transition: all 0.16s ease;
+      box-shadow: 0 0 0 1px rgba(96, 165, 250, 0.08), 0 8px 24px rgba(2, 8, 23, 0.45);
+    }
+    .top-link:hover { border-color: #4ea1ff; color: #d5e9ff; text-decoration: none; }
+    .top-link.active {
+      border-color: rgba(96, 165, 250, 0.65);
+      color: #dff1ff;
+      background: linear-gradient(180deg, rgba(37, 99, 235, 0.35), rgba(30, 64, 175, 0.28));
+    }
     h1 { margin: 0; font-size: 28px; }
     .meta { color: var(--muted); font-size: 13px; margin-top: 4px; }
     a { color: #8dc0ff; text-decoration: none; }
@@ -56,9 +106,16 @@ def render_admin_page() -> str:
     .label { color: var(--muted); font-size: 12px; margin-bottom: 4px; }
     .value { font-size: 18px; font-weight: 700; }
     .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; align-items: center; }
-    button { border: 1px solid var(--border); background: linear-gradient(180deg, rgba(37,99,235,0.95), rgba(30,64,175,0.9)); color: white; padding: 9px 12px; border-radius: 10px; cursor: pointer; font-weight: 600; box-shadow: 0 0 0 1px rgba(96,165,250,0.2), 0 8px 22px rgba(2,8,23,0.55); }
+    button { border: 1px solid var(--border); background: rgba(30, 41, 59, 0.9); color: #e5edf7; padding: 9px 12px; border-radius: 10px; cursor: pointer; font-weight: 600; box-shadow: 0 0 0 1px rgba(96,165,250,0.10), 0 8px 22px rgba(2,8,23,0.45); }
     button:hover { filter: brightness(1.08); }
-    button.danger { background: #532222; border-color: #7b2f2f; }
+    .btn { border: 1px solid var(--border); border-radius: 10px; padding: 9px 12px; font-size: 12px; font-weight: 700; line-height: 1.1; transition: all 0.15s ease; }
+    .btn-primary { background: linear-gradient(180deg, rgba(37,99,235,0.95), rgba(30,64,175,0.9)); color: #f8fbff; }
+    .btn-violet { background: linear-gradient(180deg, rgba(124,58,237,0.95), rgba(91,33,182,0.9)); color: #f8fbff; }
+    .btn-success { background: linear-gradient(180deg, rgba(5,150,105,0.95), rgba(4,120,87,0.9)); color: #ecfdf5; }
+    .btn-danger { background: linear-gradient(180deg, rgba(190,24,93,0.95), rgba(159,18,57,0.92)); border-color: rgba(244,114,182,0.35); color: #ffe4ef; }
+    .btn-ghost { background: rgba(30,41,59,0.82); color: #cfe0ff; }
+    .btn:hover { transform: translateY(-0.5px); }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
     .status { color: var(--muted); font-size: 12px; align-self: center; }
     .section-title { margin: 22px 0 8px; font-size: 18px; }
     .table-wrap { border: 1px solid var(--border); border-radius: 14px; overflow: auto; background: rgba(15,23,41,0.72); backdrop-filter: blur(6px); margin-bottom: 18px; }
@@ -121,13 +178,21 @@ def render_admin_page() -> str:
 </head>
 <body class="min-h-screen bg-void text-slate-100 antialiased">
 <div class="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_top,rgba(56,189,248,0.14),transparent_45%)]"></div>
+<div class="fx-grid"></div>
+<div class="fx-noise"></div>
 <div class="container relative mx-auto max-w-[1500px] space-y-4">
+  <nav class="top-nav">
+    <a href="/" class="top-link">Home</a>
+    <a href="/admin" class="top-link active">Admin</a>
+    <a href="/markets" class="top-link">Markets</a>
+    <a href="/health" class="top-link">Health</a>
+  </nav>
   <div class="header">
     <div>
       <h1>Admin Control Center</h1>
       <div class="meta">Operations, diagnostics, reliability, probe testing, and runtime controls.</div>
     </div>
-    <div><a href="/markets" class="rounded-xl border border-line bg-panel/60 px-4 py-2 text-sm text-cyan-300 shadow-glow transition hover:border-cyan-400 hover:text-cyan-200">Open Markets & Alerts page</a></div>
+    <div><a href="/markets" class="top-link">Open Markets & Alerts page</a></div>
   </div>
 
   <div class="cards">
@@ -144,10 +209,10 @@ def render_admin_page() -> str:
   </div>
 
   <div class="actions">
-    <button onclick="forceRefresh()">Force refresh now</button>
-    <button onclick="forceCompare()">Force compare now</button>
-    <button onclick="runCanaryNow()">Run canary now</button>
-    <button class="danger" onclick="openClearDbModal()">Clear whole DB</button>
+    <button onclick="forceRefresh()" class="btn btn-primary">Force refresh now</button>
+    <button onclick="forceCompare()" class="btn btn-violet">Force compare now</button>
+    <button onclick="runCanaryNow()" class="btn btn-success">Run canary now</button>
+    <button onclick="openClearDbModal()" class="btn btn-danger">Clear whole DB</button>
     <span id="run-status" class="status"></span>
   </div>
 
@@ -177,7 +242,7 @@ def render_admin_page() -> str:
   <div class="actions" style="margin-bottom:8px;">
     <label class="hint" for="coverage-gap-days">Days</label>
     <input id="coverage-gap-days" type="number" min="1" value="14" style="width:90px;" />
-    <button onclick="refreshCoverageGaps()">Refresh gaps</button>
+    <button onclick="refreshCoverageGaps()" class="btn btn-ghost">Refresh gaps</button>
   </div>
   <div id="coverage-gaps-meta" class="meta">Loading coverage gaps...</div>
   <div class="table-wrap">
@@ -225,8 +290,8 @@ def render_admin_page() -> str:
       <label class="hint">Renotify improvement % <input id="ovr-odds-drop-renotify-improvement-pct" type="number" step="0.1" min="0" /></label>
     </div>
     <div class="actions" style="justify-content:flex-end; margin-top:10px;">
-      <button onclick="saveRuntimeOverrides()">Apply overrides</button>
-      <button onclick="resetRuntimeOverrides()">Reset overrides</button>
+      <button onclick="saveRuntimeOverrides()" class="btn btn-primary">Apply overrides</button>
+      <button onclick="resetRuntimeOverrides()" class="btn btn-ghost">Reset overrides</button>
     </div>
   </div>
 
@@ -242,7 +307,7 @@ def render_admin_page() -> str:
   <h2 class="section-title">Canary summary</h2>
   <div class="actions" style="margin-bottom:8px;">
     <label class="hint"><input id="canary-create-alerts" type="checkbox" /> create alerts</label>
-    <button onclick="runCanaryNow()">Run canary now</button>
+    <button onclick="runCanaryNow()" class="btn btn-success">Run canary now</button>
   </div>
   <div id="canary-meta" class="meta">Loading canary...</div>
   <div class="table-wrap">
@@ -267,7 +332,7 @@ def render_admin_page() -> str:
         <label class="hint">g values <input id="probe-estave-g-values" value="25" /></label>
         <label class="hint">extra b values <input id="probe-estave-b-values" value="" /></label>
         <label class="hint"><input id="probe-estave-persist" type="checkbox" /> persist to DB</label>
-        <button onclick="runEstaveProbe()">Run e-stave probe</button>
+        <button onclick="runEstaveProbe()" class="btn btn-primary">Run e-stave probe</button>
       </div>
       <pre id="probe-estave-output">Waiting for run...</pre>
     </div>
@@ -289,7 +354,7 @@ def render_admin_page() -> str:
         </label>
         <label class="hint">Proxy URL <input id="probe-vodds-proxy" value="" /></label>
         <label class="hint"><input id="probe-vodds-persist" type="checkbox" /> persist to DB</label>
-        <button onclick="runVoddsProbe()">Run Vodds probe</button>
+        <button onclick="runVoddsProbe()" class="btn btn-violet">Run Vodds probe</button>
       </div>
       <pre id="probe-vodds-output">Waiting for run...</pre>
     </div>
@@ -303,8 +368,8 @@ def render_admin_page() -> str:
     <p class="hint">Type <strong>CLEAR DB</strong> to enable deletion.</p>
     <input id="clear-db-confirm-input" type="text" autocomplete="off" placeholder="Type: CLEAR DB" oninput="onClearDbInput()" />
     <div class="modal-actions">
-      <button onclick="closeClearDbModal()">Cancel</button>
-      <button id="clear-db-confirm-btn" class="danger" onclick="confirmClearDatabase()" disabled>Delete everything</button>
+      <button onclick="closeClearDbModal()" class="btn btn-ghost">Cancel</button>
+      <button id="clear-db-confirm-btn" onclick="confirmClearDatabase()" disabled class="btn btn-danger">Delete everything</button>
     </div>
   </div>
 </div>
@@ -870,15 +935,73 @@ def render_markets_page() -> str:
       color: var(--text);
       padding: 18px;
     }
+    .fx-grid {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background-image:
+        linear-gradient(rgba(96, 165, 250, 0.12) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(96, 165, 250, 0.12) 1px, transparent 1px);
+      background-size: 42px 42px;
+      mask-image: radial-gradient(circle at center, rgba(0, 0, 0, 0.58), transparent 78%);
+      opacity: 0.24;
+      animation: gridPulse 16s ease-in-out infinite;
+      z-index: 0;
+    }
+    .fx-noise {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background-image: radial-gradient(rgba(255, 255, 255, 0.055) 0.6px, transparent 0.6px);
+      background-size: 3px 3px;
+      opacity: 0.16;
+      mix-blend-mode: soft-light;
+      z-index: 0;
+    }
+    @keyframes gridPulse {
+      0%, 100% { opacity: 0.16; transform: translateY(0px); }
+      50% { opacity: 0.28; transform: translateY(1.5px); }
+    }
     .container { max-width: 1500px; margin: 0 auto; }
     .header { display: flex; justify-content: space-between; align-items: flex-start; gap: 14px; margin-bottom: 14px; flex-wrap: wrap; }
+    .top-nav {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    .top-link {
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 6px 12px;
+      font-size: 12px;
+      color: #9cc9ff;
+      background: rgba(11, 18, 32, 0.55);
+      text-decoration: none;
+      transition: all 0.16s ease;
+      box-shadow: 0 0 0 1px rgba(96, 165, 250, 0.08), 0 8px 24px rgba(2, 8, 23, 0.45);
+    }
+    .top-link:hover { border-color: #4ea1ff; color: #d5e9ff; text-decoration: none; }
+    .top-link.active {
+      border-color: rgba(96, 165, 250, 0.65);
+      color: #dff1ff;
+      background: linear-gradient(180deg, rgba(37, 99, 235, 0.35), rgba(30, 64, 175, 0.28));
+    }
     h1 { margin: 0; font-size: 28px; }
     .meta { color: var(--muted); font-size: 13px; margin-top: 4px; }
     a { color: #8dc0ff; text-decoration: none; }
     a:hover { text-decoration: underline; }
     .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; align-items: center; }
-    button { border: 1px solid var(--border); background: linear-gradient(180deg, rgba(37,99,235,0.95), rgba(30,64,175,0.9)); color: white; padding: 9px 12px; border-radius: 10px; cursor: pointer; font-weight: 600; box-shadow: 0 0 0 1px rgba(96,165,250,0.2), 0 8px 22px rgba(2,8,23,0.55); }
+    button { border: 1px solid var(--border); background: rgba(30, 41, 59, 0.9); color: #e5edf7; padding: 9px 12px; border-radius: 10px; cursor: pointer; font-weight: 600; box-shadow: 0 0 0 1px rgba(96,165,250,0.10), 0 8px 22px rgba(2,8,23,0.45); }
     button:hover { filter: brightness(1.08); }
+    .btn { border: 1px solid var(--border); border-radius: 10px; padding: 9px 12px; font-size: 12px; font-weight: 700; line-height: 1.1; transition: all 0.15s ease; }
+    .btn-primary { background: linear-gradient(180deg, rgba(37,99,235,0.95), rgba(30,64,175,0.9)); color: #f8fbff; }
+    .btn-violet { background: linear-gradient(180deg, rgba(124,58,237,0.95), rgba(91,33,182,0.9)); color: #f8fbff; }
+    .btn-success { background: linear-gradient(180deg, rgba(5,150,105,0.95), rgba(4,120,87,0.9)); color: #ecfdf5; }
+    .btn-danger { background: linear-gradient(180deg, rgba(190,24,93,0.95), rgba(159,18,57,0.92)); border-color: rgba(244,114,182,0.35); color: #ffe4ef; }
+    .btn-ghost { background: rgba(30,41,59,0.82); color: #cfe0ff; }
+    .btn:hover { transform: translateY(-0.5px); }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
     .status { color: var(--muted); font-size: 12px; align-self: center; }
     .section-title { margin: 22px 0 8px; font-size: 18px; }
     .table-wrap { border: 1px solid var(--border); border-radius: 14px; overflow: auto; background: rgba(15,23,41,0.72); backdrop-filter: blur(6px); margin-bottom: 18px; }
@@ -901,19 +1024,27 @@ def render_markets_page() -> str:
 </head>
 <body class="min-h-screen bg-void text-slate-100 antialiased">
 <div class="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_top,rgba(56,189,248,0.14),transparent_45%)]"></div>
+<div class="fx-grid"></div>
+<div class="fx-noise"></div>
 <div class="container relative mx-auto max-w-[1500px] space-y-4">
+  <nav class="top-nav">
+    <a href="/" class="top-link">Home</a>
+    <a href="/admin" class="top-link">Admin</a>
+    <a href="/markets" class="top-link active">Markets</a>
+    <a href="/health" class="top-link">Health</a>
+  </nav>
   <div class="header">
     <div>
       <h1>Markets & Alerts</h1>
       <div class="meta">Match tables, overlap/edge view, and alerts.</div>
     </div>
-    <div><a href="/admin" class="rounded-xl border border-line bg-panel/60 px-4 py-2 text-sm text-cyan-300 shadow-glow transition hover:border-cyan-400 hover:text-cyan-200">Back to Admin</a></div>
+    <div><a href="/admin" class="top-link">Back to Admin</a></div>
   </div>
 
   <div class="actions">
-    <button onclick="refresh()">Refresh now</button>
-    <button onclick="exportOverlapCsv()">Export overlap CSV</button>
-    <button onclick="exportAlertsCsv()">Export alerts CSV</button>
+    <button onclick="refresh()" class="btn btn-primary">Refresh now</button>
+    <button onclick="exportOverlapCsv()" class="btn btn-violet">Export overlap CSV</button>
+    <button onclick="exportAlertsCsv()" class="btn btn-ghost">Export alerts CSV</button>
     <span id="run-status" class="status"></span>
   </div>
 
@@ -971,7 +1102,7 @@ def render_markets_page() -> str:
     <div id="history-subtitle" class="meta"></div>
     <div id="history-chart-wrap"><canvas id="odds-history-canvas"></canvas></div>
     <div id="history-empty" class="meta" style="display:none;">No odds history found for this match yet.</div>
-    <div class="actions"><button onclick="closeHistoryModal()">Close</button></div>
+    <div class="actions"><button onclick="closeHistoryModal()" class="btn btn-ghost">Close</button></div>
   </div>
 </div>
 
@@ -1046,7 +1177,7 @@ def render_markets_page() -> str:
         <td class="${edgeClass}">${edge == null ? '-' : edge.toFixed(2) + '%'}</td>
         <td>${row.better_source_home ?? '-'}</td><td>${row.kickoff_utc ?? '-'}</td>
         <td>${renderTrendCell(trendByMatch[row.canonical_match_id])}</td>
-        <td><button onclick="openHistoryChart(${row.canonical_match_id})">Chart</button></td>
+        <td><button onclick="openHistoryChart(${row.canonical_match_id})" class="btn btn-ghost">Chart</button></td>
       `;
       tbody.appendChild(tr);
     }
