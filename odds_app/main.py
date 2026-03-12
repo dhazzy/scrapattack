@@ -29,6 +29,7 @@ from odds_app.services.comparison import (
     get_overlap_home_trends,
     run_match_comparison_cycle,
 )
+from odds_app.services.coverage import get_scrape_coverage_metrics
 from odds_app.services.diagnostics import run_ps3838_diagnostics_sync, run_vodds_diagnostics_sync
 from odds_app.services.match_views import list_overlap_matches, list_recent_matches, list_source_matches
 from odds_app.services.orchestrator import run_pipeline_once
@@ -1072,6 +1073,11 @@ def admin_force_compare(db: Session = Depends(get_db)) -> dict:
 @app.get("/admin/next-scrape")
 def admin_next_scrape(db: Session = Depends(get_db)) -> dict:
     return _next_scrape_payload(db)
+
+
+@app.get("/admin/coverage")
+def admin_coverage(db: Session = Depends(get_db)) -> dict:
+    return get_scrape_coverage_metrics(db)
 
 
 @app.post("/admin/clear-db")
