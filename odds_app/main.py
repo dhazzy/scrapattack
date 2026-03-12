@@ -162,6 +162,10 @@ def dashboard() -> str:
     .spark-row:last-child { margin-bottom: 0; }
     .spark-tag { width: 18px; font-size: 10px; color: var(--muted); }
     .sparkline { width: 76px; height: 18px; display: block; }
+    .status-pill { border: 1px solid var(--border); border-radius: 999px; padding: 2px 8px; font-size: 11px; font-weight: 700; display: inline-block; }
+    .status-good { color: #9df7bc; background: rgba(29, 191, 115, 0.18); border-color: rgba(29, 191, 115, 0.45); }
+    .status-warn { color: #ffe5a0; background: rgba(242, 182, 58, 0.18); border-color: rgba(242, 182, 58, 0.45); }
+    .status-bad { color: #ffb0b0; background: rgba(228, 88, 88, 0.2); border-color: rgba(228, 88, 88, 0.45); }
     table { border-collapse: collapse; width: 100%; min-width: 980px; }
     th, td {
       border-bottom: 1px solid #1f2f4d;
@@ -249,6 +253,19 @@ def dashboard() -> str:
     <button onclick="forceCompare()">Force compare now</button>
     <button class="danger" onclick="openClearDbModal()">Clear whole DB</button>
     <span id="run-status" class="status"></span>
+  </div>
+
+  <h2 class="section-title">Coverage health</h2>
+  <div id="coverage-meta" class="meta">Loading coverage...</div>
+  <div class="table-wrap">
+    <table id="coverage-table">
+      <thead>
+        <tr>
+          <th>Source</th><th>Sport</th><th>Active Events</th><th>Upcoming 24h</th><th>Upcoming 72h</th><th>Upcoming 7d</th><th>Upcoming 14d</th><th>Status</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
   </div>
 
   <h2 class="section-title">Matches on both sources (comparison)</h2>
@@ -380,6 +397,42 @@ def dashboard() -> str:
     updateCountdown();
   }
 
+  function coverageStatus(row) {
+    const up24 = Number(row.upcoming_24h ?? 0);
+    const up72 = Number(row.upcoming_72h ?? 0);
+    const active = Number(row.active_events ?? 0);
+    if (active <= 0 || up72 <= 0) return { label: 'BAD', cls: 'status-bad' };
+    if (up24 < 3) return { label: 'WARN', cls: 'status-warn' };
+    return { label: 'GOOD', cls: 'status-good' };
+  }
+
+  function renderCoverage(payload) {
+    const meta = document.getElementById('coverage-meta');
+    const tbody = document.querySelector('#coverage-table tbody');
+
+    const latest = payload.latest_scrape_by_source ?? {};
+    const snap30 = payload.snapshot_count_last_30m ?? {};
+    const generated = payload.generated_at ? formatDateUtc(payload.generated_at) : '-';
+    meta.textContent = `generated=${generated} | latest: ps3838=${latest.ps3838 ?? '-'} e_stave=${latest.e_stave ?? '-'} | snapshots last 30m: ps3838=${snap30.ps3838 ?? 0} e_stave=${snap30.e_stave ?? 0}`;
+
+    tbody.innerHTML = '';
+    for (const row of (payload.coverage ?? [])) {
+      const st = coverageStatus(row);
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${row.source}</td>
+        <td>${row.sport}</td>
+        <td>${row.active_events ?? 0}</td>
+        <td>${row.upcoming_24h ?? 0}</td>
+        <td>${row.upcoming_72h ?? 0}</td>
+        <td>${row.upcoming_168h ?? 0}</td>
+        <td>${row.upcoming_336h ?? 0}</td>
+        <td><span class="status-pill ${st.cls}">${st.label}</span></td>
+      `;
+      tbody.appendChild(tr);
+    }
+  }
+
   function renderSourceTable(tableId, rows) {
     const tbody = document.querySelector(`#${tableId} tbody`);
     tbody.innerHTML = '';
@@ -476,8 +529,9 @@ def dashboard() -> str:
   }
 
   async function refresh() {
-    const [schedule, overlap, overlapTrends, psRows, esRows, alerts] = await Promise.all([
+    const [schedule, coverage, overlap, overlapTrends, psRows, esRows, alerts] = await Promise.all([
       fetchJson('/admin/next-scrape'),
+      fetchJson('/admin/coverage'),
       fetchJson('/matches/overlap?limit=200'),
       fetchJson('/matches/overlap-trends?limit=200&hours=72&max_points=18'),
       fetchJson('/matches/source/ps3838?limit=300'),
@@ -489,6 +543,7 @@ def dashboard() -> str:
       trendByMatch[trend.canonical_match_id] = trend;
     }
     renderSchedule(schedule);
+    renderCoverage(coverage);
     renderOverlapTable(overlap, trendByMatch);
     renderSourceTable('ps-table', psRows);
     renderSourceTable('es-table', esRows);
