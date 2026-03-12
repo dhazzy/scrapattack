@@ -47,6 +47,15 @@ class Settings(BaseSettings):
     )
     estave_page_size: int = Field(default=25, alias="ESTAVE_PAGE_SIZE")
     estave_max_pages_per_query: int = Field(default=40, alias="ESTAVE_MAX_PAGES_PER_QUERY")
+    estave_max_empty_pages_per_query: int = Field(
+        default=2, alias="ESTAVE_MAX_EMPTY_PAGES_PER_QUERY"
+    )
+    estave_max_repeat_pages_per_query: int = Field(
+        default=2, alias="ESTAVE_MAX_REPEAT_PAGES_PER_QUERY"
+    )
+    estave_max_no_new_pages_per_query: int = Field(
+        default=3, alias="ESTAVE_MAX_NO_NEW_PAGES_PER_QUERY"
+    )
 
     scraper_request_timeout_sec: float = Field(default=30.0, alias="SCRAPER_REQUEST_TIMEOUT_SEC")
     scraper_enable_playwright: bool = Field(default=True, alias="SCRAPER_ENABLE_PLAYWRIGHT")

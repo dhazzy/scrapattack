@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -28,22 +29,66 @@ class EStaveScraper:
         self.settings = get_settings()
 
     async def scrape_soccer(self) -> list[OddsQuote]:
-        mobile_quotes = await self._scrape_mobile_service_quotes()
-        if mobile_quotes:
-            return mobile_quotes
-
-        generic_quotes = await extract_live_quotes(
+        mobile_task = self._scrape_mobile_service_quotes()
+        website_task = extract_live_quotes(
             source=self.source,
             url=self.settings.estave_soccer_url,
             timeout_sec=self.settings.scraper_request_timeout_sec,
             enable_playwright=self.settings.scraper_enable_playwright,
             proxy_url=self.settings.scraper_proxy_url or None,
         )
-        if generic_quotes:
-            return generic_quotes
 
-        logger.warning("No live e-stave quotes parsed.")
+        mobile_quotes: list[OddsQuote] = []
+        website_quotes: list[OddsQuote] = []
+        mobile_result, website_result = await asyncio.gather(
+            mobile_task, website_task, return_exceptions=True
+        )
+
+        if isinstance(mobile_result, Exception):
+            logger.warning("e-stave mobile service scrape failed: %s", mobile_result)
+        else:
+            mobile_quotes = mobile_result
+
+        if isinstance(website_result, Exception):
+            logger.warning("e-stave website live parse failed: %s", website_result)
+        else:
+            website_quotes = website_result
+
+        merged = self._merge_quotes(mobile_quotes + website_quotes)
+        if merged:
+            logger.info(
+                "e-stave merged quotes: mobile=%s website=%s merged=%s",
+                len(mobile_quotes),
+                len(website_quotes),
+                len(merged),
+            )
+            return merged
+
+        logger.warning("No live e-stave quotes parsed (mobile+website).")
         return []
+
+    def _quote_merge_key(self, quote: OddsQuote) -> tuple[str, str, str, str, str, str, str]:
+        home = quote.home_team.strip().lower()
+        away = quote.away_team.strip().lower()
+        sport = quote.sport.strip().lower()
+        market = quote.market_type.strip().lower()
+        selection = quote.selection.strip().lower()
+        if quote.kickoff_utc is not None:
+            kickoff = quote.kickoff_utc.replace(second=0, microsecond=0).isoformat()
+        else:
+            kickoff = f"event:{quote.external_event_id.strip().lower()}"
+        return (quote.source, sport, home, away, kickoff, market, selection)
+
+    def _merge_quotes(self, quotes: list[OddsQuote]) -> list[OddsQuote]:
+        seen: set[tuple[str, str, str, str, str, str, str]] = set()
+        merged: list[OddsQuote] = []
+        for quote in quotes:
+            key = self._quote_merge_key(quote)
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(quote)
+        return merged
 
     async def _scrape_mobile_service_quotes(self) -> list[OddsQuote]:
         base_url = "https://www.e-stave.com"
@@ -100,9 +145,14 @@ class EStaveScraper:
             }
 
             quotes: list[OddsQuote] = []
-            seen: set[tuple[str, str]] = set()
+            seen: set[tuple[str, str, str, str]] = set()
             for request in SPORT_REQUESTS:
                 for b_value in request["b_values"]:
+                    empty_pages_in_row = 0
+                    repeat_pages_in_row = 0
+                    no_new_pages_in_row = 0
+                    last_signature: str | None = None
+
                     for page in range(self.settings.estave_max_pages_per_query):
                         params = {
                             **common,
@@ -113,28 +163,72 @@ class EStaveScraper:
                         resp = await client.get(service_endpoint, headers=headers, params=params)
                         if resp.status_code >= 400:
                             break
+
                         payload = resp.json()
                         data = payload.get("data") if isinstance(payload, dict) else None
                         events = data.get("bb") if isinstance(data, dict) else None
                         if not isinstance(events, list) or not events:
-                            break
+                            empty_pages_in_row += 1
+                            if (
+                                empty_pages_in_row
+                                >= self.settings.estave_max_empty_pages_per_query
+                            ):
+                                break
+                            continue
+                        empty_pages_in_row = 0
 
                         page_quotes = self._quotes_from_events(events, request["sport"], now)
                         if not page_quotes:
-                            break
+                            no_new_pages_in_row += 1
+                            if (
+                                no_new_pages_in_row
+                                >= self.settings.estave_max_no_new_pages_per_query
+                            ):
+                                break
+                            continue
+
+                        page_signature = "|".join(
+                            sorted(
+                                {
+                                    f"{q.external_event_id}:{q.market_type}:{q.selection}"
+                                    for q in page_quotes
+                                }
+                            )
+                        )
+                        if page_signature == last_signature:
+                            repeat_pages_in_row += 1
+                            if (
+                                repeat_pages_in_row
+                                >= self.settings.estave_max_repeat_pages_per_query
+                            ):
+                                break
+                        else:
+                            repeat_pages_in_row = 0
+                        last_signature = page_signature
 
                         new_count = 0
                         for quote in page_quotes:
-                            key = (quote.external_event_id, quote.selection)
+                            key = (
+                                quote.sport,
+                                quote.external_event_id,
+                                quote.market_type,
+                                quote.selection,
+                            )
                             if key in seen:
                                 continue
                             seen.add(key)
                             quotes.append(quote)
                             new_count += 1
 
-                        # d parameter appears to be sticky in many lists; stop once pages repeat.
                         if new_count == 0:
-                            break
+                            no_new_pages_in_row += 1
+                            if (
+                                no_new_pages_in_row
+                                >= self.settings.estave_max_no_new_pages_per_query
+                            ):
+                                break
+                        else:
+                            no_new_pages_in_row = 0
 
             return quotes
 
