@@ -56,6 +56,9 @@ class Settings(BaseSettings):
     alert_dispatch_interval_sec: int = Field(default=30, alias="ALERT_DISPATCH_INTERVAL_SEC")
 
     odds_drop_threshold_pct: float = Field(default=8.0, alias="ODDS_DROP_THRESHOLD_PCT")
+    odds_drop_opening_threshold_pct: float = Field(
+        default=12.0, alias="ODDS_DROP_OPENING_THRESHOLD_PCT"
+    )
     odds_drop_lookback_min: int = Field(default=15, alias="ODDS_DROP_LOOKBACK_MIN")
     value_edge_threshold_pct: float = Field(default=4.0, alias="VALUE_EDGE_THRESHOLD_PCT")
     alert_cooldown_min: int = Field(default=20, alias="ALERT_COOLDOWN_MIN")

@@ -1,7 +1,7 @@
 from datetime import timedelta
 from decimal import Decimal
 
-from sqlalchemy import desc, select
+from sqlalchemy import asc, desc, select
 from sqlalchemy.orm import Session
 
 from odds_app.config import get_settings
@@ -14,6 +14,12 @@ def _pct_drop(old: Decimal, new: Decimal) -> float:
     if old <= 0:
         return 0.0
     return float(((old - new) / old) * Decimal(100))
+
+
+def _hours_to_kickoff(quote: OddsQuote) -> float | None:
+    if quote.kickoff_utc is None:
+        return None
+    return round((quote.kickoff_utc - quote.scraped_at).total_seconds() / 3600, 2)
 
 
 def _recent_drop_alert_exists(db: Session, quote: OddsQuote, cooldown_min: int) -> bool:
@@ -38,13 +44,17 @@ def persist_quotes_and_detect_drops(db: Session, quotes: list[OddsQuote]) -> int
 
     for quote in quotes:
         canonical = resolve_source_event_mapping(db, quote)
-        prev_stmt = (
+
+        base_stmt = (
             select(OddsSnapshot)
             .where(OddsSnapshot.source == quote.source)
             .where(OddsSnapshot.external_event_id == quote.external_event_id)
             .where(OddsSnapshot.market_type == quote.market_type)
             .where(OddsSnapshot.selection == quote.selection)
-            .where(
+        )
+
+        prev_stmt = (
+            base_stmt.where(
                 OddsSnapshot.scraped_at
                 >= quote.scraped_at - timedelta(minutes=settings.odds_drop_lookback_min)
             )
@@ -53,6 +63,13 @@ def persist_quotes_and_detect_drops(db: Session, quotes: list[OddsQuote]) -> int
             .limit(1)
         )
         previous = db.scalar(prev_stmt)
+
+        opening_stmt = (
+            base_stmt.where(OddsSnapshot.scraped_at < quote.scraped_at)
+            .order_by(asc(OddsSnapshot.scraped_at))
+            .limit(1)
+        )
+        opening = db.scalar(opening_stmt)
 
         snapshot = OddsSnapshot(
             source=quote.source,
@@ -69,37 +86,67 @@ def persist_quotes_and_detect_drops(db: Session, quotes: list[OddsQuote]) -> int
         )
         db.add(snapshot)
 
+        baseline_type: str | None = None
+        baseline_odds: Decimal | None = None
+        drop_pct = 0.0
+
         if previous and quote.odds_decimal < previous.odds_decimal:
-            drop_pct = _pct_drop(previous.odds_decimal, quote.odds_decimal)
+            recent_drop_pct = _pct_drop(previous.odds_decimal, quote.odds_decimal)
+            if recent_drop_pct >= settings.odds_drop_threshold_pct:
+                baseline_type = "recent"
+                baseline_odds = previous.odds_decimal
+                drop_pct = recent_drop_pct
+
+        is_pre_match = quote.kickoff_utc is None or quote.scraped_at <= quote.kickoff_utc
+        if opening and is_pre_match and quote.odds_decimal < opening.odds_decimal:
+            opening_drop_pct = _pct_drop(opening.odds_decimal, quote.odds_decimal)
             if (
-                drop_pct >= settings.odds_drop_threshold_pct
-                and not _recent_drop_alert_exists(db, quote, settings.alert_cooldown_min)
+                opening_drop_pct >= settings.odds_drop_opening_threshold_pct
+                and opening_drop_pct > drop_pct
             ):
-                msg = (
-                    f"[ODDS DROP] {quote.home_team} vs {quote.away_team} | "
-                    f"{quote.market_type}:{quote.selection} {previous.odds_decimal} -> "
-                    f"{quote.odds_decimal} ({drop_pct:.2f}% drop) on {quote.source}"
-                )
-                alert = Alert(
-                    alert_type="odds_drop",
-                    source=quote.source,
-                    sport=quote.sport,
-                    market_type=quote.market_type,
-                    selection=quote.selection,
-                    home_team=quote.home_team,
-                    away_team=quote.away_team,
-                    kickoff_utc=quote.kickoff_utc,
-                    message=msg,
-                    details={
-                        "canonical_match_id": canonical.id,
-                        "previous_odds": str(previous.odds_decimal),
-                        "current_odds": str(quote.odds_decimal),
-                        "drop_pct": round(drop_pct, 4),
-                        "external_event_id": quote.external_event_id,
-                    },
-                )
-                db.add(alert)
-                created_alerts += 1
+                baseline_type = "opening"
+                baseline_odds = opening.odds_decimal
+                drop_pct = opening_drop_pct
+
+        if baseline_odds is not None and not _recent_drop_alert_exists(
+            db, quote, settings.alert_cooldown_min
+        ):
+            kickoff_hours = _hours_to_kickoff(quote)
+            kickoff_suffix = (
+                ""
+                if kickoff_hours is None
+                else f" | kickoff in {kickoff_hours:.2f}h"
+            )
+            msg = (
+                f"[ODDS DROP] {quote.home_team} vs {quote.away_team} | "
+                f"{quote.market_type}:{quote.selection} {baseline_odds} -> "
+                f"{quote.odds_decimal} ({drop_pct:.2f}% drop, baseline={baseline_type}) "
+                f"on {quote.source}{kickoff_suffix}"
+            )
+            alert = Alert(
+                alert_type="odds_drop",
+                source=quote.source,
+                sport=quote.sport,
+                market_type=quote.market_type,
+                selection=quote.selection,
+                home_team=quote.home_team,
+                away_team=quote.away_team,
+                kickoff_utc=quote.kickoff_utc,
+                message=msg,
+                details={
+                    "canonical_match_id": canonical.id,
+                    "baseline_type": baseline_type,
+                    "baseline_odds": str(baseline_odds),
+                    "current_odds": str(quote.odds_decimal),
+                    "drop_pct": round(drop_pct, 4),
+                    "external_event_id": quote.external_event_id,
+                    "hours_to_kickoff": kickoff_hours,
+                    "opening_odds": str(opening.odds_decimal) if opening else None,
+                    "recent_odds": str(previous.odds_decimal) if previous else None,
+                },
+            )
+            db.add(alert)
+            created_alerts += 1
 
     db.commit()
     return created_alerts
