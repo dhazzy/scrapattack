@@ -60,6 +60,12 @@ UI:
 - `GET /admin/coverage-trend?runs=72&bucket_minutes=5`
 - `GET /admin/scrape-health?window_hours=6`
 - `GET /admin/scrape-runs/history?hours=24&bucket_minutes=5&runs=288`
+- `GET /admin/scrape-runs/recent?limit=150`
+- `GET /admin/runtime-overrides`
+- `POST /admin/runtime-overrides`
+- `POST /admin/runtime-overrides/reset`
+- `GET /admin/export/overlap.csv?limit=1000`
+- `GET /admin/export/alerts.csv?limit=2000&alert_type=all`
 - `POST /admin/force-refresh`
 - `GET /admin/diagnostics/ps3838`
 - `POST /admin/diagnostics/ps3838`
@@ -123,7 +129,18 @@ Config:
 SCRAPE_MIN_QUOTES_SUCCESS=1
 SCRAPE_RECOVERY_RETRY_COUNT=1
 SCRAPE_RECOVERY_BACKOFF_SEC=2
+SCRAPE_DEGRADED_CONSECUTIVE_FAILURES=3
+SCRAPE_DEGRADED_COOLDOWN_SEC=600
 ```
+
+## Runtime controls + exports
+
+The admin page now includes:
+
+- degraded/warn/good scrape health badges
+- a recent scrape-run replay table (attempt timeline)
+- runtime override controls (apply/reset without restart)
+- CSV export buttons for overlap matches and alerts
 
 ## Odds-drop confirmation + dedupe
 

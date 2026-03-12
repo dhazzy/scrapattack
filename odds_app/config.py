@@ -69,6 +69,10 @@ class Settings(BaseSettings):
     scrape_min_quotes_success: int = Field(default=1, alias="SCRAPE_MIN_QUOTES_SUCCESS")
     scrape_recovery_retry_count: int = Field(default=1, alias="SCRAPE_RECOVERY_RETRY_COUNT")
     scrape_recovery_backoff_sec: float = Field(default=2.0, alias="SCRAPE_RECOVERY_BACKOFF_SEC")
+    scrape_degraded_consecutive_failures: int = Field(
+        default=3, alias="SCRAPE_DEGRADED_CONSECUTIVE_FAILURES"
+    )
+    scrape_degraded_cooldown_sec: int = Field(default=600, alias="SCRAPE_DEGRADED_COOLDOWN_SEC")
 
     odds_drop_threshold_pct: float = Field(default=8.0, alias="ODDS_DROP_THRESHOLD_PCT")
     odds_drop_opening_threshold_pct: float = Field(

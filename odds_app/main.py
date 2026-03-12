@@ -1,8 +1,11 @@
+import csv
+import json
 import time
+from io import StringIO
 from datetime import datetime, timedelta, timezone
 
 from fastapi import Body, Depends, FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -33,7 +36,17 @@ from odds_app.services.coverage import get_scrape_coverage_metrics, get_scrape_c
 from odds_app.services.diagnostics import run_ps3838_diagnostics_sync, run_vodds_diagnostics_sync
 from odds_app.services.match_views import list_overlap_matches, list_recent_matches, list_source_matches
 from odds_app.services.orchestrator import run_pipeline_once
-from odds_app.services.reliability import get_scrape_health_summary, get_scrape_run_history
+from odds_app.services.reliability import (
+    get_scrape_health_summary,
+    get_scrape_run_history,
+    list_recent_scrape_runs,
+)
+from odds_app.services.runtime_overrides import (
+    ALLOWED_OVERRIDE_KEYS,
+    clear_runtime_overrides,
+    get_runtime_overrides,
+    set_runtime_overrides,
+)
 
 settings = get_settings()
 app = FastAPI(title=settings.app_name)
@@ -254,8 +267,11 @@ def dashboard() -> str:
       width: min(980px, 100%);
     }
     #history-subtitle { margin-bottom: 8px; }
+    #history-chart-wrap { position: relative; width: 100%; height: 320px; }
+    #odds-history-canvas { width: 100% !important; height: 100% !important; display: block; }
     #history-empty { margin-top: 10px; }
-    #scrape-run-history-canvas { width: 100%; height: 220px; }
+    #scrape-run-history-wrap { position: relative; width: 100%; height: 220px; }
+    #scrape-run-history-canvas { width: 100% !important; height: 100% !important; display: block; }
     #scrape-run-history-empty { margin-top: 6px; }
   </style>
 </head>
@@ -284,6 +300,8 @@ def dashboard() -> str:
   <div class="actions">
     <button onclick="forceRefresh()">Force refresh now</button>
     <button onclick="forceCompare()">Force compare now</button>
+    <button onclick="exportOverlapCsv()">Export overlap CSV</button>
+    <button onclick="exportAlertsCsv()">Export alerts CSV</button>
     <button class="danger" onclick="openClearDbModal()">Clear whole DB</button>
     <span id="run-status" class="status"></span>
   </div>
@@ -320,7 +338,7 @@ def dashboard() -> str:
     <table id="scrape-health-table">
       <thead>
         <tr>
-          <th>Source</th><th>Runs</th><th>Success %</th><th>Consecutive Failures</th><th>Avg Quotes</th><th>Avg Duration ms</th><th>Last Success</th><th>Last Failure</th><th>Last Error</th>
+          <th>Source</th><th>Runs</th><th>Success %</th><th>Status</th><th>Consecutive Failures</th><th>Avg Quotes</th><th>Avg Duration ms</th><th>Last Success</th><th>Last Failure</th><th>Last Error</th>
         </tr>
       </thead>
       <tbody></tbody>
@@ -336,8 +354,44 @@ def dashboard() -> str:
         <option value="all">All sources</option>
       </select>
     </div>
-    <canvas id="scrape-run-history-canvas" height="120"></canvas>
+    <div id="scrape-run-history-wrap">
+      <canvas id="scrape-run-history-canvas"></canvas>
+    </div>
     <div id="scrape-run-history-empty" class="hint" style="display:none;">No scrape run history available in selected window.</div>
+  </div>
+
+  <h2 class="section-title">Runtime overrides</h2>
+  <div id="runtime-overrides-meta" class="meta">Loading runtime overrides...</div>
+  <div class="card" style="margin-bottom:18px;">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;">
+      <label class="hint">Scrape retries <input id="ovr-scrape-recovery-retry-count" type="number" min="0" style="width:100%;margin-top:4px;background:#0b1220;color:#e5edf7;border:1px solid #233452;border-radius:8px;padding:6px;" /></label>
+      <label class="hint">Backoff sec <input id="ovr-scrape-recovery-backoff-sec" type="number" step="0.1" min="0" style="width:100%;margin-top:4px;background:#0b1220;color:#e5edf7;border:1px solid #233452;border-radius:8px;padding:6px;" /></label>
+      <label class="hint">Min quotes success <input id="ovr-scrape-min-quotes-success" type="number" min="0" style="width:100%;margin-top:4px;background:#0b1220;color:#e5edf7;border:1px solid #233452;border-radius:8px;padding:6px;" /></label>
+      <label class="hint">Degraded fail count <input id="ovr-scrape-degraded-consecutive-failures" type="number" min="1" style="width:100%;margin-top:4px;background:#0b1220;color:#e5edf7;border:1px solid #233452;border-radius:8px;padding:6px;" /></label>
+      <label class="hint">Degraded cooldown sec <input id="ovr-scrape-degraded-cooldown-sec" type="number" min="0" style="width:100%;margin-top:4px;background:#0b1220;color:#e5edf7;border:1px solid #233452;border-radius:8px;padding:6px;" /></label>
+      <label class="hint">Drop threshold % <input id="ovr-odds-drop-threshold-pct" type="number" step="0.1" min="0" style="width:100%;margin-top:4px;background:#0b1220;color:#e5edf7;border:1px solid #233452;border-radius:8px;padding:6px;" /></label>
+      <label class="hint">Opening drop threshold % <input id="ovr-odds-drop-opening-threshold-pct" type="number" step="0.1" min="0" style="width:100%;margin-top:4px;background:#0b1220;color:#e5edf7;border:1px solid #233452;border-radius:8px;padding:6px;" /></label>
+      <label class="hint">Drop confirmations <input id="ovr-odds-drop-confirmation-count" type="number" min="1" style="width:100%;margin-top:4px;background:#0b1220;color:#e5edf7;border:1px solid #233452;border-radius:8px;padding:6px;" /></label>
+      <label class="hint">Confirmation window min <input id="ovr-odds-drop-confirmation-window-min" type="number" min="1" style="width:100%;margin-top:4px;background:#0b1220;color:#e5edf7;border:1px solid #233452;border-radius:8px;padding:6px;" /></label>
+      <label class="hint">Renotify improvement % <input id="ovr-odds-drop-renotify-improvement-pct" type="number" step="0.1" min="0" style="width:100%;margin-top:4px;background:#0b1220;color:#e5edf7;border:1px solid #233452;border-radius:8px;padding:6px;" /></label>
+    </div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px;">
+      <button onclick="saveRuntimeOverrides()">Apply overrides</button>
+      <button onclick="resetRuntimeOverrides()">Reset overrides</button>
+    </div>
+  </div>
+
+  <h2 class="section-title">Recent scrape runs</h2>
+  <div id="scrape-runs-meta" class="meta">Loading scrape runs...</div>
+  <div class="table-wrap">
+    <table id="scrape-runs-table">
+      <thead>
+        <tr>
+          <th>Start (UTC)</th><th>Source</th><th>Sport</th><th>Trigger</th><th>Mode</th><th>Success</th><th>Quotes</th><th>Duration ms</th><th>Error</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
   </div>
 
   <h2 class="section-title">Matches on both sources (comparison)</h2>
@@ -422,7 +476,7 @@ def dashboard() -> str:
   <div class="modal chart-modal" role="dialog" aria-modal="true" aria-labelledby="history-title">
     <h3 id="history-title">Odds movement history</h3>
     <div id="history-subtitle" class="hint"></div>
-    <canvas id="odds-history-canvas" height="130"></canvas>
+    <div id="history-chart-wrap"><canvas id="odds-history-canvas"></canvas></div>
     <div id="history-empty" class="hint" style="display:none;">No odds history found for this match yet.</div>
     <div class="modal-actions">
       <button onclick="closeHistoryModal()">Close</button>
@@ -541,15 +595,18 @@ def dashboard() -> str:
     const meta = document.getElementById('scrape-health-meta');
     const tbody = document.querySelector('#scrape-health-table tbody');
     const generated = payload.generated_at ? formatDateUtc(payload.generated_at) : '-';
-    meta.textContent = `generated=${generated} | window=${payload.window_hours ?? 6}h`;
+    meta.textContent = `generated=${generated} | window=${payload.window_hours ?? 6}h | degraded_threshold=${payload.degraded_threshold ?? '-'}`;
 
     tbody.innerHTML = '';
     for (const row of (payload.sources ?? [])) {
+      const status = row.status ?? 'GOOD';
+      const statusClass = status === 'DEGRADED' ? 'status-bad' : (status === 'WARN' ? 'status-warn' : 'status-good');
       const tr = document.createElement('tr');
       tr.innerHTML = `
         <td>${row.source}</td>
         <td>${row.runs ?? 0}</td>
         <td>${row.success_rate_pct ?? 0}</td>
+        <td><span class="status-pill ${statusClass}">${status}</span></td>
         <td>${row.consecutive_failures ?? 0}</td>
         <td>${row.avg_quotes ?? 0}</td>
         <td>${row.avg_duration_ms ?? 0}</td>
@@ -637,10 +694,13 @@ def dashboard() -> str:
 
     empty.style.display = 'none';
     canvas.style.display = 'block';
+    canvas.style.width = '100%';
+    canvas.style.height = '100%';
     scrapeRunHistoryChart = new Chart(canvas.getContext('2d'), {
       type: 'line',
       data: { datasets },
       options: {
+        animation: false,
         responsive: true,
         maintainAspectRatio: false,
         scales: {
@@ -652,6 +712,120 @@ def dashboard() -> str:
         },
       },
     });
+  }
+
+  function renderScrapeRuns(payload) {
+    const meta = document.getElementById('scrape-runs-meta');
+    const tbody = document.querySelector('#scrape-runs-table tbody');
+    const rows = payload.runs ?? [];
+    meta.textContent = `runs=${rows.length}`;
+
+    tbody.innerHTML = '';
+    for (const row of rows) {
+      const ok = row.success ? 'YES' : 'NO';
+      const okClass = row.success ? 'positive' : 'negative';
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${formatDateUtc(row.started_at)}</td>
+        <td>${row.source}</td>
+        <td>${row.sport ?? '-'}</td>
+        <td>${row.trigger ?? '-'}</td>
+        <td>${row.mode ?? '-'}</td>
+        <td class="${okClass}">${ok}</td>
+        <td>${row.quotes_count ?? 0}</td>
+        <td>${row.duration_ms ?? 0}</td>
+        <td>${row.error_message ?? '-'}</td>
+      `;
+      tbody.appendChild(tr);
+    }
+  }
+
+  function setInputValue(id, value) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (document.activeElement === el) return;
+    el.value = value == null ? '' : String(value);
+  }
+
+  function renderRuntimeOverrides(payload) {
+    const meta = document.getElementById('runtime-overrides-meta');
+    const overrides = payload.overrides ?? {};
+    const count = Object.keys(overrides).length;
+    meta.textContent = `active_overrides=${count} | allowed=${(payload.allowed_keys ?? []).length}`;
+
+    setInputValue('ovr-scrape-recovery-retry-count', overrides.scrape_recovery_retry_count);
+    setInputValue('ovr-scrape-recovery-backoff-sec', overrides.scrape_recovery_backoff_sec);
+    setInputValue('ovr-scrape-min-quotes-success', overrides.scrape_min_quotes_success);
+    setInputValue('ovr-scrape-degraded-consecutive-failures', overrides.scrape_degraded_consecutive_failures);
+    setInputValue('ovr-scrape-degraded-cooldown-sec', overrides.scrape_degraded_cooldown_sec);
+    setInputValue('ovr-odds-drop-threshold-pct', overrides.odds_drop_threshold_pct);
+    setInputValue('ovr-odds-drop-opening-threshold-pct', overrides.odds_drop_opening_threshold_pct);
+    setInputValue('ovr-odds-drop-confirmation-count', overrides.odds_drop_confirmation_count);
+    setInputValue('ovr-odds-drop-confirmation-window-min', overrides.odds_drop_confirmation_window_min);
+    setInputValue('ovr-odds-drop-renotify-improvement-pct', overrides.odds_drop_renotify_improvement_pct);
+  }
+
+  function collectRuntimeOverridePayload() {
+    const readNum = (id) => {
+      const el = document.getElementById(id);
+      if (!el) return null;
+      const raw = (el.value || '').trim();
+      if (!raw) return null;
+      const n = Number(raw);
+      return Number.isFinite(n) ? n : null;
+    };
+    const payload = {};
+    const put = (key, value) => {
+      if (value != null) payload[key] = value;
+    };
+    put('scrape_recovery_retry_count', readNum('ovr-scrape-recovery-retry-count'));
+    put('scrape_recovery_backoff_sec', readNum('ovr-scrape-recovery-backoff-sec'));
+    put('scrape_min_quotes_success', readNum('ovr-scrape-min-quotes-success'));
+    put('scrape_degraded_consecutive_failures', readNum('ovr-scrape-degraded-consecutive-failures'));
+    put('scrape_degraded_cooldown_sec', readNum('ovr-scrape-degraded-cooldown-sec'));
+    put('odds_drop_threshold_pct', readNum('ovr-odds-drop-threshold-pct'));
+    put('odds_drop_opening_threshold_pct', readNum('ovr-odds-drop-opening-threshold-pct'));
+    put('odds_drop_confirmation_count', readNum('ovr-odds-drop-confirmation-count'));
+    put('odds_drop_confirmation_window_min', readNum('ovr-odds-drop-confirmation-window-min'));
+    put('odds_drop_renotify_improvement_pct', readNum('ovr-odds-drop-renotify-improvement-pct'));
+    return payload;
+  }
+
+  async function saveRuntimeOverrides() {
+    const status = document.getElementById('run-status');
+    const payload = collectRuntimeOverridePayload();
+    status.textContent = 'Applying runtime overrides...';
+    try {
+      await fetchJson('/admin/runtime-overrides', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      status.textContent = 'Runtime overrides updated';
+      await refresh();
+    } catch (err) {
+      status.textContent = `Override update failed: ${err}`;
+    }
+  }
+
+  async function resetRuntimeOverrides() {
+    const status = document.getElementById('run-status');
+    status.textContent = 'Resetting runtime overrides...';
+    try {
+      await fetchJson('/admin/runtime-overrides/reset', { method: 'POST' });
+      status.textContent = 'Runtime overrides reset';
+      await refresh();
+    } catch (err) {
+      status.textContent = `Override reset failed: ${err}`;
+    }
+  }
+
+  function exportOverlapCsv() {
+    window.open('/admin/export/overlap.csv?limit=1000', '_blank');
+  }
+
+  function exportAlertsCsv() {
+    window.open('/admin/export/alerts.csv?limit=2000', '_blank');
   }
 
   function renderSourceTable(tableId, rows) {
@@ -794,12 +968,14 @@ def dashboard() -> str:
 
 
   async function refresh() {
-    const [schedule, coverage, coverageTrend, scrapeHealth, scrapeRunHistory, overlap, overlapTrends, psRows, esRows, oddsDropAlerts, alerts] = await Promise.all([
+    const [schedule, coverage, coverageTrend, scrapeHealth, scrapeRunHistory, scrapeRuns, runtimeOverrides, overlap, overlapTrends, psRows, esRows, oddsDropAlerts, alerts] = await Promise.all([
       fetchJson('/admin/next-scrape'),
       fetchJson('/admin/coverage'),
       fetchJson('/admin/coverage-trend?runs=72&bucket_minutes=5'),
       fetchJson('/admin/scrape-health?window_hours=6'),
       fetchJson('/admin/scrape-runs/history?hours=24&bucket_minutes=5&runs=288'),
+      fetchJson('/admin/scrape-runs/recent?limit=150'),
+      fetchJson('/admin/runtime-overrides'),
       fetchJson('/matches/overlap?limit=200'),
       fetchJson('/matches/overlap-trends?limit=200&hours=72&max_points=18'),
       fetchJson('/matches/source/ps3838?limit=300'),
@@ -816,6 +992,8 @@ def dashboard() -> str:
     renderCoverageTrend(coverageTrend);
     renderScrapeHealth(scrapeHealth);
     renderScrapeRunHistory(scrapeRunHistory);
+    renderScrapeRuns(scrapeRuns);
+    renderRuntimeOverrides(runtimeOverrides);
     renderOverlapTable(overlap, trendByMatch);
     renderSourceTable('ps-table', psRows);
     renderSourceTable('es-table', esRows);
@@ -886,6 +1064,8 @@ def dashboard() -> str:
 
     empty.style.display = 'none';
     canvas.style.display = 'block';
+    canvas.style.width = '100%';
+    canvas.style.height = '100%';
 
     const datasets = payload.series.map((series) => ({
       label: series.label,
@@ -906,6 +1086,7 @@ def dashboard() -> str:
       type: 'line',
       data: { datasets },
       options: {
+        animation: false,
         responsive: true,
         maintainAspectRatio: false,
         scales: {
@@ -1090,7 +1271,8 @@ def match_details_page(canonical_match_id: int) -> str:
     th { background: var(--table-head); position: sticky; top: 0; z-index: 1; }
     tr:hover td { background: #13213f; }
     .hint { color: var(--muted); font-size: 12px; }
-    #movement-canvas { width: 100%; height: 320px; }
+    #movement-chart-wrap { position: relative; width: 100%; height: 320px; }
+    #movement-canvas { width: 100% !important; height: 100% !important; display: block; }
     #no-chart-data { display: none; margin-top: 8px; }
   </style>
 </head>
@@ -1132,7 +1314,7 @@ def match_details_page(canonical_match_id: int) -> str:
           <button id="reset-filters">Reset</button>
         </div>
       </div>
-      <canvas id="movement-canvas"></canvas>
+      <div id="movement-chart-wrap"><canvas id="movement-canvas"></canvas></div>
       <div id="no-chart-data" class="hint">No chart data for current filters.</div>
       <div class="hint">Odds movement over time (all saved 1x2 snapshots in DB).</div>
     </div>
@@ -1238,6 +1420,8 @@ def match_details_page(canonical_match_id: int) -> str:
       } else {
         noData.style.display = 'none';
         canvas.style.display = 'block';
+        canvas.style.width = '100%';
+        canvas.style.height = '100%';
       }
 
       if (movementChart) movementChart.destroy();
@@ -1245,6 +1429,7 @@ def match_details_page(canonical_match_id: int) -> str:
         type: 'line',
         data: { datasets },
         options: {
+          animation: false,
           responsive: true,
           maintainAspectRatio: false,
           scales: {
@@ -1467,6 +1652,155 @@ def admin_scrape_runs_history(
         hours=hours,
         bucket_minutes=bucket_minutes,
         runs=runs,
+    )
+
+
+@app.get("/admin/scrape-runs/recent")
+def admin_scrape_runs_recent(
+    source: str | None = None,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+) -> dict:
+    source_norm = (source or "").strip() or None
+    return {"runs": list_recent_scrape_runs(db, source=source_norm, limit=limit)}
+
+
+@app.get("/admin/runtime-overrides")
+def admin_runtime_overrides() -> dict:
+    return {
+        "overrides": get_runtime_overrides(),
+        "allowed_keys": sorted(ALLOWED_OVERRIDE_KEYS),
+    }
+
+
+@app.post("/admin/runtime-overrides")
+def admin_runtime_overrides_update(payload: dict = Body(default_factory=dict)) -> dict:
+    try:
+        current = set_runtime_overrides(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "status": "ok",
+        "overrides": current,
+        "allowed_keys": sorted(ALLOWED_OVERRIDE_KEYS),
+    }
+
+
+@app.post("/admin/runtime-overrides/reset")
+def admin_runtime_overrides_reset() -> dict:
+    clear_runtime_overrides()
+    return {
+        "status": "ok",
+        "overrides": {},
+        "allowed_keys": sorted(ALLOWED_OVERRIDE_KEYS),
+    }
+
+
+@app.get("/admin/export/overlap.csv")
+def admin_export_overlap_csv(limit: int = 500, db: Session = Depends(get_db)) -> Response:
+    limit = max(1, min(int(limit), 5000))
+    rows = list_overlap_matches(db, limit=limit)
+    buf = StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(
+        [
+            "canonical_match_id",
+            "sport",
+            "home_team",
+            "away_team",
+            "kickoff_utc",
+            "edge_pct",
+            "best_home_source",
+            "best_home_odds",
+            "best_draw_source",
+            "best_draw_odds",
+            "best_away_source",
+            "best_away_odds",
+            "primary_source",
+            "secondary_source",
+        ]
+    )
+    for row in rows:
+        writer.writerow(
+            [
+                row.canonical_match_id,
+                row.sport,
+                row.home_team,
+                row.away_team,
+                row.kickoff_utc.isoformat() if row.kickoff_utc else "",
+                row.edge_pct,
+                row.best_home_source,
+                row.best_home_odds,
+                row.best_draw_source,
+                row.best_draw_odds,
+                row.best_away_source,
+                row.best_away_odds,
+                row.primary_source,
+                row.secondary_source,
+            ]
+        )
+    filename = f"overlap_export_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.csv"
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/admin/export/alerts.csv")
+def admin_export_alerts_csv(
+    limit: int = 1000,
+    alert_type: str = "all",
+    db: Session = Depends(get_db),
+) -> Response:
+    limit = max(1, min(int(limit), 10000))
+    stmt = select(Alert).order_by(Alert.created_at.desc()).limit(limit)
+    if alert_type and alert_type != "all":
+        stmt = stmt.where(Alert.alert_type == alert_type)
+    rows = list(db.scalars(stmt))
+
+    buf = StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(
+        [
+            "id",
+            "created_at",
+            "alert_type",
+            "source",
+            "sport",
+            "home_team",
+            "away_team",
+            "market_type",
+            "selection",
+            "message",
+            "is_sent",
+            "sent_at",
+            "details_json",
+        ]
+    )
+    for row in rows:
+        writer.writerow(
+            [
+                row.id,
+                row.created_at.isoformat() if row.created_at else "",
+                row.alert_type,
+                row.source,
+                row.sport,
+                row.home_team,
+                row.away_team,
+                row.market_type,
+                row.selection,
+                row.message,
+                row.is_sent,
+                row.sent_at.isoformat() if row.sent_at else "",
+                json.dumps(row.details or {}, ensure_ascii=True),
+            ]
+        )
+    filename = f"alerts_export_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.csv"
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 

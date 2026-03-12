@@ -1,6 +1,6 @@
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Callable
+from typing import Any, Callable
 
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
@@ -9,6 +9,7 @@ from odds_app.config import get_settings
 from odds_app.constants import DEFAULT_COMPARISON_SOURCES
 from odds_app.models import ScrapeRun
 from odds_app.scrapers.base import OddsQuote
+from odds_app.services.runtime_overrides import get_runtime_overrides
 
 ScrapeFn = Callable[[], list[OddsQuote]]
 
@@ -26,6 +27,10 @@ def _trim_error(value: str | None, max_len: int = 1200) -> str | None:
 def _floor_bucket(value: datetime, bucket_minutes: int) -> datetime:
     minute_bucket = (value.minute // bucket_minutes) * bucket_minutes
     return value.replace(minute=minute_bucket, second=0, microsecond=0)
+
+
+def _get_override(key: str, default: Any) -> Any:
+    return get_runtime_overrides().get(key, default)
 
 
 def _record_scrape_run(
@@ -60,6 +65,71 @@ def _record_scrape_run(
     return run
 
 
+def _recent_source_runs(
+    db: Session,
+    source: str,
+    limit: int = 40,
+    include_throttled: bool = True,
+) -> list[ScrapeRun]:
+    stmt = (
+        select(ScrapeRun)
+        .where(ScrapeRun.source == source)
+        .order_by(desc(ScrapeRun.started_at))
+        .limit(max(1, limit))
+    )
+    if not include_throttled:
+        stmt = stmt.where(ScrapeRun.mode != "throttled")
+    return list(db.scalars(stmt))
+
+
+def _consecutive_failures(runs: list[ScrapeRun]) -> int:
+    count = 0
+    for run in runs:
+        if run.success:
+            break
+        count += 1
+    return count
+
+
+def get_source_degraded_state(db: Session, source: str) -> dict:
+    settings = get_settings()
+    fail_threshold = max(
+        1,
+        int(
+            _get_override(
+                "scrape_degraded_consecutive_failures",
+                settings.scrape_degraded_consecutive_failures,
+            )
+        ),
+    )
+    cooldown_sec = max(
+        0,
+        int(_get_override("scrape_degraded_cooldown_sec", settings.scrape_degraded_cooldown_sec)),
+    )
+    runs = _recent_source_runs(db, source=source, limit=120, include_throttled=False)
+    now = _utcnow()
+    consecutive_failures = _consecutive_failures(runs)
+    is_degraded = consecutive_failures >= fail_threshold
+    last_run_at = runs[0].started_at if runs else None
+    throttle_until = (
+        (last_run_at + timedelta(seconds=cooldown_sec))
+        if is_degraded and last_run_at is not None
+        else None
+    )
+    throttle_active = throttle_until is not None and now < throttle_until
+
+    return {
+        "source": source,
+        "is_degraded": is_degraded,
+        "throttle_active": throttle_active,
+        "consecutive_failures": consecutive_failures,
+        "threshold_failures": fail_threshold,
+        "cooldown_sec": cooldown_sec,
+        "last_run_at": last_run_at.isoformat() if last_run_at else None,
+        "throttle_until": throttle_until.isoformat() if throttle_until else None,
+    }
+
+
 def execute_scrape_with_recovery(
     db: Session,
     *,
@@ -72,13 +142,56 @@ def execute_scrape_with_recovery(
     settings = get_settings()
     required_quotes = max(
         0,
-        settings.scrape_min_quotes_success
-        if min_quotes_success is None
-        else int(min_quotes_success),
+        int(
+            min_quotes_success
+            if min_quotes_success is not None
+            else _get_override("scrape_min_quotes_success", settings.scrape_min_quotes_success)
+        ),
     )
-    retry_count = max(0, int(settings.scrape_recovery_retry_count))
-    backoff_sec = max(0.0, float(settings.scrape_recovery_backoff_sec))
+    retry_count = max(
+        0,
+        int(_get_override("scrape_recovery_retry_count", settings.scrape_recovery_retry_count)),
+    )
+    backoff_sec = max(
+        0.0,
+        float(_get_override("scrape_recovery_backoff_sec", settings.scrape_recovery_backoff_sec)),
+    )
     max_attempts = 1 + retry_count
+
+    degraded_state = get_source_degraded_state(db, source)
+    if trigger == "scheduled" and degraded_state.get("throttle_active"):
+        now = _utcnow()
+        run = _record_scrape_run(
+            db,
+            source=source,
+            sport=sport,
+            trigger=trigger,
+            mode="throttled",
+            started_at=now,
+            finished_at=now,
+            success=False,
+            quotes_count=0,
+            error_message=f"throttled_degraded_until:{degraded_state['throttle_until']}",
+        )
+        return [], {
+            "source": source,
+            "sport": sport,
+            "trigger": trigger,
+            "success": False,
+            "throttled": True,
+            "degraded": degraded_state,
+            "attempts": [
+                {
+                    "attempt": 0,
+                    "mode": "throttled",
+                    "run_id": run.id,
+                    "success": False,
+                    "quotes": 0,
+                    "duration_ms": run.duration_ms,
+                    "error": run.error_message,
+                }
+            ],
+        }
 
     attempts_meta: list[dict] = []
     best_quotes: list[OddsQuote] = []
@@ -132,6 +245,7 @@ def execute_scrape_with_recovery(
                 "success": True,
                 "attempts": attempts_meta,
                 "recovered": attempt > 1,
+                "degraded": get_source_degraded_state(db, source),
             }
 
         last_error = error_message
@@ -146,10 +260,22 @@ def execute_scrape_with_recovery(
         "attempts": attempts_meta,
         "recovered": False,
         "error": last_error,
+        "degraded": get_source_degraded_state(db, source),
     }
 
 
 def get_scrape_health_summary(db: Session, window_hours: int = 6, per_source_limit: int = 200) -> dict:
+    settings = get_settings()
+    degraded_threshold = max(
+        1,
+        int(
+            _get_override(
+                "scrape_degraded_consecutive_failures",
+                settings.scrape_degraded_consecutive_failures,
+            )
+        ),
+    )
+
     window_hours = max(1, int(window_hours))
     per_source_limit = max(20, int(per_source_limit))
     now = _utcnow()
@@ -178,25 +304,30 @@ def get_scrape_health_summary(db: Session, window_hours: int = 6, per_source_lim
         avg_quotes = round(sum(run.quotes_count for run in source_runs) / total, 2)
         avg_duration_ms = round(sum(run.duration_ms for run in source_runs) / total, 1)
 
-        consecutive_failures = 0
-        for run in source_runs:
-            if run.success:
-                break
-            consecutive_failures += 1
-
+        consecutive_failures = _consecutive_failures(source_runs)
         last_success = next((run.started_at for run in source_runs if run.success), None)
         last_failure = next((run.started_at for run in source_runs if not run.success), None)
         last_error = next((run.error_message for run in source_runs if run.error_message), None)
+        success_rate = round((success_count / total) * 100, 2)
+
+        if consecutive_failures >= degraded_threshold:
+            status = "DEGRADED"
+        elif success_rate < 60:
+            status = "WARN"
+        else:
+            status = "GOOD"
 
         summary.append(
             {
                 "source": source,
                 "window_hours": window_hours,
                 "runs": total,
-                "success_rate_pct": round((success_count / total) * 100, 2),
+                "success_rate_pct": success_rate,
                 "avg_quotes": avg_quotes,
                 "avg_duration_ms": avg_duration_ms,
                 "consecutive_failures": consecutive_failures,
+                "status": status,
+                "degraded": consecutive_failures >= degraded_threshold,
                 "last_success_at": last_success.isoformat() if last_success else None,
                 "last_failure_at": last_failure.isoformat() if last_failure else None,
                 "last_error": last_error,
@@ -206,6 +337,7 @@ def get_scrape_health_summary(db: Session, window_hours: int = 6, per_source_lim
     return {
         "generated_at": now.isoformat(),
         "window_hours": window_hours,
+        "degraded_threshold": degraded_threshold,
         "sources": summary,
     }
 
@@ -298,3 +430,26 @@ def get_scrape_run_history(
         "buckets": [bucket.isoformat() for bucket in buckets],
         "series": series,
     }
+
+
+def list_recent_scrape_runs(db: Session, source: str | None = None, limit: int = 200) -> list[dict]:
+    stmt = select(ScrapeRun).order_by(desc(ScrapeRun.started_at)).limit(max(1, min(limit, 1000)))
+    if source:
+        stmt = stmt.where(ScrapeRun.source == source)
+    runs = list(db.scalars(stmt))
+    return [
+        {
+            "id": run.id,
+            "source": run.source,
+            "sport": run.sport,
+            "trigger": run.trigger,
+            "mode": run.mode,
+            "success": run.success,
+            "quotes_count": run.quotes_count,
+            "duration_ms": run.duration_ms,
+            "started_at": run.started_at.isoformat() if run.started_at else None,
+            "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+            "error_message": run.error_message,
+        }
+        for run in runs
+    ]

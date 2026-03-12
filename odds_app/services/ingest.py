@@ -8,6 +8,7 @@ from odds_app.config import get_settings
 from odds_app.models import Alert, OddsSnapshot
 from odds_app.scrapers.base import OddsQuote
 from odds_app.services.matching import resolve_source_event_mapping
+from odds_app.services.runtime_overrides import get_runtime_overrides
 
 
 def _pct_drop(old: Decimal, new: Decimal) -> float:
@@ -20,6 +21,28 @@ def _hours_to_kickoff(quote: OddsQuote) -> float | None:
     if quote.kickoff_utc is None:
         return None
     return round((quote.kickoff_utc - quote.scraped_at).total_seconds() / 3600, 2)
+
+
+def _drop_quality_score(
+    drop_pct: float,
+    confirmation_points: int,
+    confirmation_required: int,
+    kickoff_hours: float | None,
+) -> float:
+    drop_score = min(60.0, max(0.0, drop_pct) * 3.0)
+    confirmation_ratio = min(1.0, confirmation_points / max(1, confirmation_required))
+    confirmation_score = confirmation_ratio * 25.0
+    if kickoff_hours is None:
+        kickoff_score = 8.0
+    elif kickoff_hours <= 2:
+        kickoff_score = 12.0
+    elif kickoff_hours <= 24:
+        kickoff_score = 10.0
+    elif kickoff_hours <= 72:
+        kickoff_score = 8.0
+    else:
+        kickoff_score = 6.0
+    return round(min(100.0, drop_score + confirmation_score + kickoff_score), 2)
 
 
 def _latest_drop_alert(db: Session, quote: OddsQuote) -> Alert | None:
@@ -91,6 +114,42 @@ def _confirmation_points(db: Session, quote: OddsQuote, window_min: int) -> int:
 
 def persist_quotes_and_detect_drops(db: Session, quotes: list[OddsQuote]) -> int:
     settings = get_settings()
+    overrides = get_runtime_overrides()
+
+    odds_drop_threshold_pct = float(
+        overrides.get("odds_drop_threshold_pct", settings.odds_drop_threshold_pct)
+    )
+    opening_drop_threshold_pct = float(
+        overrides.get(
+            "odds_drop_opening_threshold_pct",
+            settings.odds_drop_opening_threshold_pct,
+        )
+    )
+    confirmation_count = max(
+        1,
+        int(
+            overrides.get(
+                "odds_drop_confirmation_count",
+                settings.odds_drop_confirmation_count,
+            )
+        ),
+    )
+    confirmation_window_min = max(
+        1,
+        int(
+            overrides.get(
+                "odds_drop_confirmation_window_min",
+                settings.odds_drop_confirmation_window_min,
+            )
+        ),
+    )
+    renotify_improvement_pct = float(
+        overrides.get(
+            "odds_drop_renotify_improvement_pct",
+            settings.odds_drop_renotify_improvement_pct,
+        )
+    )
+
     created_alerts = 0
 
     for quote in quotes:
@@ -143,7 +202,7 @@ def persist_quotes_and_detect_drops(db: Session, quotes: list[OddsQuote]) -> int
 
         if previous and quote.odds_decimal < previous.odds_decimal:
             recent_drop_pct = _pct_drop(previous.odds_decimal, quote.odds_decimal)
-            if recent_drop_pct >= settings.odds_drop_threshold_pct:
+            if recent_drop_pct >= odds_drop_threshold_pct:
                 baseline_type = "recent"
                 baseline_odds = previous.odds_decimal
                 drop_pct = recent_drop_pct
@@ -151,10 +210,7 @@ def persist_quotes_and_detect_drops(db: Session, quotes: list[OddsQuote]) -> int
         is_pre_match = quote.kickoff_utc is None or quote.scraped_at <= quote.kickoff_utc
         if opening and is_pre_match and quote.odds_decimal < opening.odds_decimal:
             opening_drop_pct = _pct_drop(opening.odds_decimal, quote.odds_decimal)
-            if (
-                opening_drop_pct >= settings.odds_drop_opening_threshold_pct
-                and opening_drop_pct > drop_pct
-            ):
+            if opening_drop_pct >= opening_drop_threshold_pct and opening_drop_pct > drop_pct:
                 baseline_type = "opening"
                 baseline_odds = opening.odds_decimal
                 drop_pct = opening_drop_pct
@@ -162,10 +218,8 @@ def persist_quotes_and_detect_drops(db: Session, quotes: list[OddsQuote]) -> int
         if baseline_odds is None:
             continue
 
-        confirmation_points = _confirmation_points(
-            db, quote, settings.odds_drop_confirmation_window_min
-        )
-        if confirmation_points < max(1, settings.odds_drop_confirmation_count):
+        confirmation_points = _confirmation_points(db, quote, confirmation_window_min)
+        if confirmation_points < confirmation_count:
             continue
 
         latest_alert = _latest_drop_alert(db, quote)
@@ -173,21 +227,26 @@ def persist_quotes_and_detect_drops(db: Session, quotes: list[OddsQuote]) -> int
             quote,
             latest_alert,
             settings.alert_cooldown_min,
-            settings.odds_drop_renotify_improvement_pct,
+            renotify_improvement_pct,
         )
         if not allow_emit:
             continue
 
         kickoff_hours = _hours_to_kickoff(quote)
-        kickoff_suffix = "" if kickoff_hours is None else f" | kickoff in {kickoff_hours:.2f}h"
-        confirm_suffix = (
-            f" | confirmations={confirmation_points}/{settings.odds_drop_confirmation_count}"
+        quality_score = _drop_quality_score(
+            drop_pct,
+            confirmation_points,
+            confirmation_count,
+            kickoff_hours,
         )
+        kickoff_suffix = "" if kickoff_hours is None else f" | kickoff in {kickoff_hours:.2f}h"
+        confirm_suffix = f" | confirmations={confirmation_points}/{confirmation_count}"
+        quality_suffix = f" | quality={quality_score:.1f}"
         msg = (
             f"[ODDS DROP] {quote.home_team} vs {quote.away_team} | "
             f"{quote.market_type}:{quote.selection} {baseline_odds} -> "
             f"{quote.odds_decimal} ({drop_pct:.2f}% drop, baseline={baseline_type}) "
-            f"on {quote.source}{confirm_suffix}{kickoff_suffix}"
+            f"on {quote.source}{confirm_suffix}{quality_suffix}{kickoff_suffix}"
         )
 
         alert = Alert(
@@ -206,13 +265,14 @@ def persist_quotes_and_detect_drops(db: Session, quotes: list[OddsQuote]) -> int
                 "baseline_odds": str(baseline_odds),
                 "current_odds": str(quote.odds_decimal),
                 "drop_pct": round(drop_pct, 4),
+                "quality_score": quality_score,
                 "external_event_id": quote.external_event_id,
                 "hours_to_kickoff": kickoff_hours,
                 "opening_odds": str(opening.odds_decimal) if opening else None,
                 "recent_odds": str(previous.odds_decimal) if previous else None,
                 "confirmation_points": confirmation_points,
-                "confirmation_required": max(1, settings.odds_drop_confirmation_count),
-                "confirmation_window_min": settings.odds_drop_confirmation_window_min,
+                "confirmation_required": confirmation_count,
+                "confirmation_window_min": confirmation_window_min,
                 "renotify_improvement_pct": (
                     round(improvement_pct, 4) if improvement_pct is not None else None
                 ),
