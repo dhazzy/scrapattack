@@ -1,12 +1,18 @@
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
+
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from odds_app.constants import DEFAULT_COMPARISON_SOURCES
-from odds_app.models import OddsSnapshot
+from odds_app.models import CanonicalMatch, OddsSnapshot, SourceEvent
 from odds_app.scrapers.base import OddsQuote
 from odds_app.services.match_views import list_overlap_matches
 from odds_app.services.matching import resolve_source_event_mapping
 from odds_app.services.value_scan import scan_value_edges
+
+SELECTION_ORDER = ("home", "draw", "away")
+SELECTION_LABEL = {"home": "Home", "draw": "Draw", "away": "Away"}
 
 
 def reconcile_match_mappings(db: Session, sources: tuple[str, str] = DEFAULT_COMPARISON_SOURCES) -> int:
@@ -54,4 +60,76 @@ def run_match_comparison_cycle(
         "reconciled_events": reconciled_events,
         "overlap_matches": overlap_matches,
         "value_edge_alerts": value_edge_alerts,
+    }
+
+
+def get_match_odds_history(
+    db: Session,
+    canonical_match_id: int,
+    hours: int = 240,
+    sources: tuple[str, str] = DEFAULT_COMPARISON_SOURCES,
+) -> dict:
+    canonical = db.get(CanonicalMatch, canonical_match_id)
+    if not canonical:
+        raise ValueError("canonical match not found")
+
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=max(1, hours))
+    source_events = list(
+        db.scalars(
+            select(SourceEvent)
+            .where(SourceEvent.canonical_match_id == canonical_match_id)
+            .where(SourceEvent.source.in_(list(sources)))
+            .order_by(SourceEvent.last_seen_at.desc())
+        )
+    )
+
+    latest_event_by_source: dict[str, SourceEvent] = {}
+    for event in source_events:
+        if event.source not in latest_event_by_source:
+            latest_event_by_source[event.source] = event
+
+    series: list[dict] = []
+    for source, event in latest_event_by_source.items():
+        snapshots = list(
+            db.scalars(
+                select(OddsSnapshot)
+                .where(OddsSnapshot.source == source)
+                .where(OddsSnapshot.external_event_id == event.external_event_id)
+                .where(OddsSnapshot.market_type == "1x2")
+                .where(OddsSnapshot.selection.in_(list(SELECTION_ORDER)))
+                .where(OddsSnapshot.scraped_at >= cutoff)
+                .order_by(OddsSnapshot.scraped_at.asc())
+            )
+        )
+        grouped: dict[str, list[OddsSnapshot]] = {selection: [] for selection in SELECTION_ORDER}
+        for snap in snapshots:
+            if snap.selection in grouped:
+                grouped[snap.selection].append(snap)
+
+        for selection in SELECTION_ORDER:
+            points = grouped[selection]
+            if not points:
+                continue
+            series.append(
+                {
+                    "source": source,
+                    "selection": selection,
+                    "label": f"{source} {SELECTION_LABEL.get(selection, selection)}",
+                    "points": [
+                        {
+                            "scraped_at": snap.scraped_at,
+                            "odds_decimal": Decimal(snap.odds_decimal),
+                        }
+                        for snap in points
+                    ],
+                }
+            )
+
+    return {
+        "canonical_match_id": canonical.id,
+        "sport": canonical.sport,
+        "home_team": canonical.display_home_team,
+        "away_team": canonical.display_away_team,
+        "kickoff_utc": canonical.kickoff_bucket_utc,
+        "series": series,
     }

@@ -58,6 +58,27 @@ class OddsSnapshotResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class OddsHistoryPoint(BaseModel):
+    scraped_at: datetime
+    odds_decimal: Decimal
+
+
+class OddsHistorySeries(BaseModel):
+    source: str
+    selection: str
+    label: str
+    points: list[OddsHistoryPoint]
+
+
+class MatchOddsHistoryResponse(BaseModel):
+    canonical_match_id: int
+    sport: str
+    home_team: str
+    away_team: str
+    kickoff_utc: datetime | None
+    series: list[OddsHistorySeries]
+
+
 class SourceEventSummary(BaseModel):
     source: str
     sport: str

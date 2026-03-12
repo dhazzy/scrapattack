@@ -15,13 +15,14 @@ from odds_app.schemas import (
     ForceCompareResponse,
     HealthResponse,
     MatchSummaryResponse,
+    MatchOddsHistoryResponse,
     OddsSnapshotResponse,
     OverlapMatchRow,
     PS3838DiagnosticsOverrides,
     RunOnceResponse,
     SourceMatchRow,
 )
-from odds_app.services.comparison import run_match_comparison_cycle
+from odds_app.services.comparison import get_match_odds_history, run_match_comparison_cycle
 from odds_app.services.diagnostics import run_ps3838_diagnostics_sync, run_vodds_diagnostics_sync
 from odds_app.services.match_views import list_overlap_matches, list_recent_matches, list_source_matches
 from odds_app.services.orchestrator import run_pipeline_once
@@ -202,6 +203,11 @@ def dashboard() -> str:
       justify-content: flex-end;
       gap: 8px;
     }
+    .chart-modal {
+      width: min(980px, 100%);
+    }
+    #history-subtitle { margin-bottom: 8px; }
+    #history-empty { margin-top: 10px; }
   </style>
 </head>
 <body>
@@ -241,7 +247,7 @@ def dashboard() -> str:
           <th>Sport</th><th>Match ID</th><th>Match</th>
           <th>PS H</th><th>PS D</th><th>PS A</th>
           <th>ES H</th><th>ES D</th><th>ES A</th>
-          <th>Edge H %</th><th>Better (H)</th><th>Kickoff (UTC)</th>
+          <th>Edge H %</th><th>Better (H)</th><th>Kickoff (UTC)</th><th>Chart</th>
         </tr>
       </thead>
       <tbody></tbody>
@@ -299,8 +305,24 @@ def dashboard() -> str:
   </div>
 </div>
 
+<div id="history-modal" class="modal-backdrop" aria-hidden="true">
+  <div class="modal chart-modal" role="dialog" aria-modal="true" aria-labelledby="history-title">
+    <h3 id="history-title">Odds movement history</h3>
+    <div id="history-subtitle" class="hint"></div>
+    <canvas id="odds-history-canvas" height="130"></canvas>
+    <div id="history-empty" class="hint" style="display:none;">No odds history found for this match yet.</div>
+    <div class="modal-actions">
+      <button onclick="closeHistoryModal()">Close</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
+
 <script>
   let nextScrapeAtMs = null;
+  let oddsHistoryChart = null;
 
   async function fetchJson(url, options = {}) {
     const res = await fetch(url, options);
@@ -387,6 +409,7 @@ def dashboard() -> str:
         <td class="${edgeClass}">${edge == null ? '-' : edge.toFixed(2) + '%'}</td>
         <td>${row.better_source_home ?? '-'}</td>
         <td>${row.kickoff_utc ?? '-'}</td>
+        <td><button onclick="openHistoryChart(${row.canonical_match_id})">Chart</button></td>
       `;
       tbody.appendChild(tr);
     }
@@ -446,6 +469,94 @@ def dashboard() -> str:
     }
   }
 
+  function chartColorForSeries(source, selection) {
+    const bySource = {
+      ps3838: { home: '#4ea1ff', draw: '#7eb9ff', away: '#b3d7ff' },
+      e_stave: { home: '#f6a75a', draw: '#f7c485', away: '#fde0b6' },
+    };
+    return (bySource[source] && bySource[source][selection]) || '#c8d2e2';
+  }
+
+  function closeHistoryModal() {
+    const modal = document.getElementById('history-modal');
+    modal.classList.remove('show');
+    modal.setAttribute('aria-hidden', 'true');
+    if (oddsHistoryChart) {
+      oddsHistoryChart.destroy();
+      oddsHistoryChart = null;
+    }
+  }
+
+  function renderHistoryChart(payload) {
+    const subtitle = document.getElementById('history-subtitle');
+    const empty = document.getElementById('history-empty');
+    const canvas = document.getElementById('odds-history-canvas');
+
+    subtitle.textContent = `${payload.home_team} vs ${payload.away_team} | sport=${payload.sport} | kickoff=${payload.kickoff_utc ?? '-'}`;
+
+    if (!payload.series || payload.series.length === 0) {
+      empty.style.display = 'block';
+      canvas.style.display = 'none';
+      return;
+    }
+
+    empty.style.display = 'none';
+    canvas.style.display = 'block';
+
+    const datasets = payload.series.map((series) => ({
+      label: series.label,
+      data: series.points.map((point) => ({
+        x: point.scraped_at,
+        y: Number(point.odds_decimal),
+      })),
+      borderColor: chartColorForSeries(series.source, series.selection),
+      backgroundColor: chartColorForSeries(series.source, series.selection),
+      borderWidth: 2,
+      pointRadius: 0,
+      tension: 0.2,
+      spanGaps: true,
+      borderDash: series.selection === 'draw' ? [6, 4] : [],
+    }));
+
+    if (oddsHistoryChart) {
+      oddsHistoryChart.destroy();
+    }
+
+    oddsHistoryChart = new Chart(canvas.getContext('2d'), {
+      type: 'line',
+      data: { datasets },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+          x: { type: 'time', time: { tooltipFormat: 'yyyy-LL-dd HH:mm:ss' }, ticks: { color: '#c6d3e8' }, grid: { color: '#223450' } },
+          y: { ticks: { color: '#c6d3e8' }, grid: { color: '#223450' } },
+        },
+        plugins: {
+          legend: { labels: { color: '#dce8f8' } },
+        },
+      },
+    });
+  }
+
+  async function openHistoryChart(canonicalMatchId) {
+    const status = document.getElementById('run-status');
+    status.textContent = `Loading chart for match ${canonicalMatchId}...`;
+    const modal = document.getElementById('history-modal');
+    modal.classList.add('show');
+    modal.setAttribute('aria-hidden', 'false');
+
+    try {
+      const payload = await fetchJson(`/matches/${canonicalMatchId}/odds-history?hours=240`);
+      renderHistoryChart(payload);
+      status.textContent = `Loaded odds history for match ${canonicalMatchId}`;
+    } catch (err) {
+      status.textContent = `Failed to load chart: ${err}`;
+      document.getElementById('history-empty').style.display = 'block';
+      document.getElementById('odds-history-canvas').style.display = 'none';
+    }
+  }
+
   function openClearDbModal() {
     const modal = document.getElementById('clear-db-modal');
     const input = document.getElementById('clear-db-confirm-input');
@@ -483,6 +594,12 @@ def dashboard() -> str:
   document.getElementById('clear-db-modal').addEventListener('click', (event) => {
     if (event.target.id === 'clear-db-modal') {
       closeClearDbModal();
+    }
+  });
+
+  document.getElementById('history-modal').addEventListener('click', (event) => {
+    if (event.target.id === 'history-modal') {
+      closeHistoryModal();
     }
   });
 
@@ -535,6 +652,18 @@ def matches_by_source(
 @app.get("/matches/overlap", response_model=list[OverlapMatchRow])
 def overlap_matches(limit: int = 100, db: Session = Depends(get_db)) -> list[OverlapMatchRow]:
     return list_overlap_matches(db, limit=limit)
+
+
+@app.get("/matches/{canonical_match_id}/odds-history", response_model=MatchOddsHistoryResponse)
+def match_odds_history(
+    canonical_match_id: int,
+    hours: int = 240,
+    db: Session = Depends(get_db),
+) -> dict:
+    try:
+        return get_match_odds_history(db, canonical_match_id=canonical_match_id, hours=hours)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.post("/admin/force-refresh", response_model=RunOnceResponse)
