@@ -29,10 +29,12 @@ class AlertResponse(BaseModel):
     id: int
     alert_type: str
     source: str | None
+    sport: str
     market_type: str
     selection: str
     home_team: str
     away_team: str
+    kickoff_utc: datetime | None
     message: str
     details: dict
     is_sent: bool

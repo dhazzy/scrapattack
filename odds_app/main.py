@@ -29,7 +29,7 @@ from odds_app.services.comparison import (
     get_overlap_home_trends,
     run_match_comparison_cycle,
 )
-from odds_app.services.coverage import get_scrape_coverage_metrics
+from odds_app.services.coverage import get_scrape_coverage_metrics, get_scrape_coverage_trend
 from odds_app.services.diagnostics import run_ps3838_diagnostics_sync, run_vodds_diagnostics_sync
 from odds_app.services.match_views import list_overlap_matches, list_recent_matches, list_source_matches
 from odds_app.services.orchestrator import run_pipeline_once
@@ -268,6 +268,19 @@ def dashboard() -> str:
     </table>
   </div>
 
+  <h2 class="section-title">Coverage trend (last 24h)</h2>
+  <div id="coverage-trend-meta" class="meta">Loading trend...</div>
+  <div class="table-wrap">
+    <table id="coverage-trend-table">
+      <thead>
+        <tr>
+          <th>Source</th><th>Events trend</th><th>Future 72h trend</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
   <h2 class="section-title">Matches on both sources (comparison)</h2>
   <div class="table-wrap">
     <table id="overlap-table">
@@ -309,12 +322,24 @@ def dashboard() -> str:
     </table>
   </div>
 
-  <h2 class="section-title">Recent alerts</h2>
+  <h2 class="section-title">Recent odds-drop alerts</h2>
+  <div class="table-wrap">
+    <table id="odds-drop-table">
+      <thead>
+        <tr>
+          <th>Time</th><th>Sport</th><th>Source</th><th>Match</th><th>Market</th><th>Selection</th><th>Baseline</th><th>Current</th><th>Drop %</th><th>Kickoff</th><th>Message</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <h2 class="section-title">Recent alerts (all)</h2>
   <div class="table-wrap">
     <table id="alerts-table">
       <thead>
         <tr>
-          <th>Time</th><th>Type</th><th>Match</th><th>Message</th>
+          <th>Time</th><th>Sport</th><th>Type</th><th>Source</th><th>Market</th><th>Selection</th><th>Match</th><th>Kickoff</th><th>Sent</th><th>Message</th><th>Details</th>
         </tr>
       </thead>
       <tbody></tbody>
@@ -433,6 +458,24 @@ def dashboard() -> str:
     }
   }
 
+  function renderCoverageTrend(payload) {
+    const meta = document.getElementById('coverage-trend-meta');
+    const tbody = document.querySelector('#coverage-trend-table tbody');
+    const generated = payload.generated_at ? formatDateUtc(payload.generated_at) : '-';
+    meta.textContent = `generated=${generated} | hours=${payload.hours ?? 24} | bucket=${payload.bucket_minutes ?? 30}m`;
+
+    tbody.innerHTML = '';
+    for (const row of (payload.series ?? [])) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${row.source}</td>
+        <td>${sparklineSvg(row.event_counts ?? [], '#4ea1ff', 220, 26)}</td>
+        <td>${sparklineSvg(row.future_72h_counts ?? [], '#f6a75a', 220, 26)}</td>
+      `;
+      tbody.appendChild(tr);
+    }
+  }
+
   function renderSourceTable(tableId, rows) {
     const tbody = document.querySelector(`#${tableId} tbody`);
     tbody.innerHTML = '';
@@ -454,12 +497,12 @@ def dashboard() -> str:
     }
   }
 
-  function sparklineSvg(values, color) {
+  function sparklineSvg(values, color, width = 76, height = 18) {
     if (!values || values.length === 0) {
       return '<span class="muted">-</span>';
     }
-    const w = 76;
-    const h = 18;
+    const w = width;
+    const h = height;
     const min = Math.min(...values);
     const max = Math.max(...values);
     const range = max - min || 1;
@@ -470,7 +513,7 @@ def dashboard() -> str:
         return `${x.toFixed(1)},${y.toFixed(1)}`;
       })
       .join(' ');
-    return `<svg class="sparkline" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><polyline fill="none" stroke="${color}" stroke-width="1.8" points="${points}"/></svg>`;
+    return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" style="width:${w}px;height:${h}px;"><polyline fill="none" stroke="${color}" stroke-width="1.8" points="${points}"/></svg>`;
   }
 
   function renderTrendCell(trend) {
@@ -513,29 +556,75 @@ def dashboard() -> str:
     }
   }
 
-  function renderAlerts(rows) {
-    const tbody = document.querySelector('#alerts-table tbody');
+  function formatCompactDetails(details) {
+    if (!details || Object.keys(details).length === 0) return '-';
+    const pairs = Object.entries(details)
+      .slice(0, 8)
+      .map(([k, v]) => `${k}=${v}`)
+      .join(' | ');
+    return pairs || '-';
+  }
+
+  function renderOddsDropAlerts(rows) {
+    const tbody = document.querySelector('#odds-drop-table tbody');
     tbody.innerHTML = '';
     for (const row of rows) {
+      const details = row.details ?? {};
+      const dropPct = details.drop_pct ?? details.drop_from_opening_pct ?? null;
+      const baseline = details.baseline_odds_decimal ?? details.opening_odds_decimal ?? '-';
+      const current = details.current_odds_decimal ?? '-';
       const tr = document.createElement('tr');
       tr.innerHTML = `
-        <td>${row.created_at}</td>
-        <td>${row.alert_type}</td>
+        <td>${formatDateUtc(row.created_at)}</td>
+        <td>${row.sport ?? '-'}</td>
+        <td>${row.source ?? '-'}</td>
         <td>${row.home_team} vs ${row.away_team}</td>
+        <td>${row.market_type ?? '-'}</td>
+        <td>${row.selection ?? '-'}</td>
+        <td>${baseline}</td>
+        <td>${current}</td>
+        <td>${dropPct == null ? '-' : Number(dropPct).toFixed(2) + '%'}</td>
+        <td>${formatDateUtc(row.kickoff_utc)}</td>
         <td>${row.message}</td>
       `;
       tbody.appendChild(tr);
     }
   }
 
+  function renderAlerts(rows) {
+    const tbody = document.querySelector('#alerts-table tbody');
+    tbody.innerHTML = '';
+    for (const row of rows) {
+      const detailsTxt = formatCompactDetails(row.details ?? {});
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${formatDateUtc(row.created_at)}</td>
+        <td>${row.sport ?? '-'}</td>
+        <td>${row.alert_type}</td>
+        <td>${row.source ?? '-'}</td>
+        <td>${row.market_type ?? '-'}</td>
+        <td>${row.selection ?? '-'}</td>
+        <td>${row.home_team} vs ${row.away_team}</td>
+        <td>${formatDateUtc(row.kickoff_utc)}</td>
+        <td>${row.is_sent ? formatDateUtc(row.sent_at) : '-'}</td>
+        <td>${row.message}</td>
+        <td>${detailsTxt}</td>
+      `;
+      tbody.appendChild(tr);
+    }
+  }
+
+
   async function refresh() {
-    const [schedule, coverage, overlap, overlapTrends, psRows, esRows, alerts] = await Promise.all([
+    const [schedule, coverage, coverageTrend, overlap, overlapTrends, psRows, esRows, oddsDropAlerts, alerts] = await Promise.all([
       fetchJson('/admin/next-scrape'),
       fetchJson('/admin/coverage'),
+      fetchJson('/admin/coverage-trend?hours=24&bucket_minutes=30'),
       fetchJson('/matches/overlap?limit=200'),
       fetchJson('/matches/overlap-trends?limit=200&hours=72&max_points=18'),
       fetchJson('/matches/source/ps3838?limit=300'),
       fetchJson('/matches/source/e_stave?limit=300'),
+      fetchJson('/alerts/odds-drops?limit=120'),
       fetchJson('/alerts/recent?limit=80'),
     ]);
     const trendByMatch = {};
@@ -544,11 +633,14 @@ def dashboard() -> str:
     }
     renderSchedule(schedule);
     renderCoverage(coverage);
+    renderCoverageTrend(coverageTrend);
     renderOverlapTable(overlap, trendByMatch);
     renderSourceTable('ps-table', psRows);
     renderSourceTable('es-table', esRows);
+    renderOddsDropAlerts(oddsDropAlerts);
     renderAlerts(alerts);
   }
+
 
   async function forceRefresh() {
     const status = document.getElementById('run-status');
@@ -597,6 +689,11 @@ def dashboard() -> str:
     const empty = document.getElementById('history-empty');
     const canvas = document.getElementById('odds-history-canvas');
 
+    if (oddsHistoryChart) {
+      oddsHistoryChart.destroy();
+      oddsHistoryChart = null;
+    }
+
     subtitle.textContent = `${payload.home_team} vs ${payload.away_team} | sport=${payload.sport} | kickoff=${payload.kickoff_utc ?? '-'}`;
 
     if (!payload.series || payload.series.length === 0) {
@@ -622,10 +719,6 @@ def dashboard() -> str:
       spanGaps: true,
       borderDash: series.selection === 'draw' ? [6, 4] : [],
     }));
-
-    if (oddsHistoryChart) {
-      oddsHistoryChart.destroy();
-    }
 
     oddsHistoryChart = new Chart(canvas.getContext('2d'), {
       type: 'line',
@@ -944,8 +1037,13 @@ def match_details_page(canonical_match_id: int) -> str:
       const noData = document.getElementById('no-chart-data');
       const canvas = document.getElementById('movement-canvas');
       if (datasets.length === 0) {
+        if (movementChart) {
+          movementChart.destroy();
+          movementChart = null;
+        }
         noData.style.display = 'block';
         canvas.style.display = 'none';
+        return;
       } else {
         noData.style.display = 'none';
         canvas.style.display = 'block';
@@ -1046,6 +1144,17 @@ def recent_alerts(limit: int = 50, db: Session = Depends(get_db)) -> list[Alert]
     return list(db.scalars(stmt))
 
 
+@app.get("/alerts/odds-drops", response_model=list[AlertResponse])
+def recent_odds_drop_alerts(limit: int = 80, db: Session = Depends(get_db)) -> list[Alert]:
+    stmt = (
+        select(Alert)
+        .where(Alert.alert_type == "odds_drop")
+        .order_by(Alert.created_at.desc())
+        .limit(limit)
+    )
+    return list(db.scalars(stmt))
+
+
 @app.get("/odds/recent", response_model=list[OddsSnapshotResponse])
 def recent_odds(limit: int = 50, db: Session = Depends(get_db)) -> list[OddsSnapshot]:
     stmt = select(OddsSnapshot).order_by(OddsSnapshot.scraped_at.desc()).limit(limit)
@@ -1133,6 +1242,15 @@ def admin_next_scrape(db: Session = Depends(get_db)) -> dict:
 @app.get("/admin/coverage")
 def admin_coverage(db: Session = Depends(get_db)) -> dict:
     return get_scrape_coverage_metrics(db)
+
+
+@app.get("/admin/coverage-trend")
+def admin_coverage_trend(
+    hours: int = 24,
+    bucket_minutes: int = 30,
+    db: Session = Depends(get_db),
+) -> dict:
+    return get_scrape_coverage_trend(db, hours=hours, bucket_minutes=bucket_minutes)
 
 
 @app.post("/admin/clear-db")

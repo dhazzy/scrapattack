@@ -9,6 +9,11 @@ from odds_app.models import OddsSnapshot, SourceEvent
 DEFAULT_HORIZONS_HOURS = (24, 72, 168, 336)
 
 
+def _floor_bucket(value: datetime, bucket_minutes: int) -> datetime:
+    minute_bucket = (value.minute // bucket_minutes) * bucket_minutes
+    return value.replace(minute=minute_bucket, second=0, microsecond=0)
+
+
 def get_scrape_coverage_metrics(
     db: Session,
     sources: tuple[str, str] = DEFAULT_COMPARISON_SOURCES,
@@ -102,4 +107,75 @@ def get_scrape_coverage_metrics(
             source: snapshot_count_30m.get(source, 0) for source in sources
         },
         "coverage": by_source_sport,
+    }
+
+
+def get_scrape_coverage_trend(
+    db: Session,
+    sources: tuple[str, str] = DEFAULT_COMPARISON_SOURCES,
+    hours: int = 24,
+    bucket_minutes: int = 30,
+) -> dict:
+    now = datetime.now(timezone.utc)
+    hours = max(1, hours)
+    bucket_minutes = max(5, bucket_minutes)
+    cutoff = now - timedelta(hours=hours)
+
+    snapshots = list(
+        db.scalars(
+            select(OddsSnapshot)
+            .where(OddsSnapshot.source.in_(list(sources)))
+            .where(OddsSnapshot.market_type == "1x2")
+            .where(OddsSnapshot.selection == "home")
+            .where(OddsSnapshot.scraped_at >= cutoff)
+            .order_by(OddsSnapshot.scraped_at.asc())
+        )
+    )
+
+    first_bucket = _floor_bucket(cutoff, bucket_minutes)
+    last_bucket = _floor_bucket(now, bucket_minutes)
+    buckets: list[datetime] = []
+    cursor = first_bucket
+    while cursor <= last_bucket:
+        buckets.append(cursor)
+        cursor = cursor + timedelta(minutes=bucket_minutes)
+
+    bucket_index = {bucket: idx for idx, bucket in enumerate(buckets)}
+    event_sets = {
+        source: [set() for _ in buckets]
+        for source in sources
+    }
+    future72_sets = {
+        source: [set() for _ in buckets]
+        for source in sources
+    }
+
+    for snap in snapshots:
+        bucket = _floor_bucket(snap.scraped_at, bucket_minutes)
+        idx = bucket_index.get(bucket)
+        if idx is None:
+            continue
+        event_sets[snap.source][idx].add(snap.external_event_id)
+
+        if snap.kickoff_utc is not None:
+            horizon_end = snap.scraped_at + timedelta(hours=72)
+            if snap.scraped_at <= snap.kickoff_utc <= horizon_end:
+                future72_sets[snap.source][idx].add(snap.external_event_id)
+
+    series = []
+    for source in sources:
+        series.append(
+            {
+                "source": source,
+                "event_counts": [len(s) for s in event_sets[source]],
+                "future_72h_counts": [len(s) for s in future72_sets[source]],
+            }
+        )
+
+    return {
+        "generated_at": now.isoformat(),
+        "hours": hours,
+        "bucket_minutes": bucket_minutes,
+        "buckets": [bucket.isoformat() for bucket in buckets],
+        "series": series,
     }
