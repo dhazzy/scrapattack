@@ -22,7 +22,11 @@ from odds_app.schemas import (
     RunOnceResponse,
     SourceMatchRow,
 )
-from odds_app.services.comparison import get_match_odds_history, run_match_comparison_cycle
+from odds_app.services.comparison import (
+    get_match_odds_history,
+    get_overlap_home_trends,
+    run_match_comparison_cycle,
+)
 from odds_app.services.diagnostics import run_ps3838_diagnostics_sync, run_vodds_diagnostics_sync
 from odds_app.services.match_views import list_overlap_matches, list_recent_matches, list_source_matches
 from odds_app.services.orchestrator import run_pipeline_once
@@ -150,6 +154,11 @@ def dashboard() -> str:
       background: var(--panel-2);
       margin-bottom: 18px;
     }
+    .spark-cell { min-width: 110px; }
+    .spark-row { display: flex; align-items: center; gap: 4px; line-height: 1; margin-bottom: 2px; }
+    .spark-row:last-child { margin-bottom: 0; }
+    .spark-tag { width: 18px; font-size: 10px; color: var(--muted); }
+    .sparkline { width: 76px; height: 18px; display: block; }
     table { border-collapse: collapse; width: 100%; min-width: 980px; }
     th, td {
       border-bottom: 1px solid #1f2f4d;
@@ -247,7 +256,7 @@ def dashboard() -> str:
           <th>Sport</th><th>Match ID</th><th>Match</th>
           <th>PS H</th><th>PS D</th><th>PS A</th>
           <th>ES H</th><th>ES D</th><th>ES A</th>
-          <th>Edge H %</th><th>Better (H)</th><th>Kickoff (UTC)</th><th>Chart</th>
+          <th>Edge H %</th><th>Better (H)</th><th>Kickoff (UTC)</th><th>Trend (H)</th><th>Chart</th>
         </tr>
       </thead>
       <tbody></tbody>
@@ -389,7 +398,39 @@ def dashboard() -> str:
     }
   }
 
-  function renderOverlapTable(rows) {
+  function sparklineSvg(values, color) {
+    if (!values || values.length === 0) {
+      return '<span class="muted">-</span>';
+    }
+    const w = 76;
+    const h = 18;
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const range = max - min || 1;
+    const points = values
+      .map((value, idx) => {
+        const x = values.length === 1 ? w / 2 : (idx * w) / (values.length - 1);
+        const y = h - ((value - min) / range) * h;
+        return `${x.toFixed(1)},${y.toFixed(1)}`;
+      })
+      .join(' ');
+    return `<svg class="sparkline" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><polyline fill="none" stroke="${color}" stroke-width="1.8" points="${points}"/></svg>`;
+  }
+
+  function renderTrendCell(trend) {
+    const ps = trend?.ps3838_home ?? [];
+    const es = trend?.estave_home ?? [];
+    const psLine = sparklineSvg(ps, '#4ea1ff');
+    const esLine = sparklineSvg(es, '#f6a75a');
+    return `
+      <div class="spark-cell">
+        <div class="spark-row"><span class="spark-tag">PS</span>${psLine}</div>
+        <div class="spark-row"><span class="spark-tag">ES</span>${esLine}</div>
+      </div>
+    `;
+  }
+
+  function renderOverlapTable(rows, trendByMatch = {}) {
     const tbody = document.querySelector('#overlap-table tbody');
     tbody.innerHTML = '';
     for (const row of rows) {
@@ -409,6 +450,7 @@ def dashboard() -> str:
         <td class="${edgeClass}">${edge == null ? '-' : edge.toFixed(2) + '%'}</td>
         <td>${row.better_source_home ?? '-'}</td>
         <td>${row.kickoff_utc ?? '-'}</td>
+        <td>${renderTrendCell(trendByMatch[row.canonical_match_id])}</td>
         <td><button onclick="openHistoryChart(${row.canonical_match_id})">Chart</button></td>
       `;
       tbody.appendChild(tr);
@@ -431,15 +473,20 @@ def dashboard() -> str:
   }
 
   async function refresh() {
-    const [schedule, overlap, psRows, esRows, alerts] = await Promise.all([
+    const [schedule, overlap, overlapTrends, psRows, esRows, alerts] = await Promise.all([
       fetchJson('/admin/next-scrape'),
       fetchJson('/matches/overlap?limit=200'),
+      fetchJson('/matches/overlap-trends?limit=200&hours=72&max_points=18'),
       fetchJson('/matches/source/ps3838?limit=300'),
       fetchJson('/matches/source/e_stave?limit=300'),
       fetchJson('/alerts/recent?limit=80'),
     ]);
+    const trendByMatch = {};
+    for (const trend of (overlapTrends.trends ?? [])) {
+      trendByMatch[trend.canonical_match_id] = trend;
+    }
     renderSchedule(schedule);
-    renderOverlapTable(overlap);
+    renderOverlapTable(overlap, trendByMatch);
     renderSourceTable('ps-table', psRows);
     renderSourceTable('es-table', esRows);
     renderAlerts(alerts);
@@ -652,6 +699,25 @@ def matches_by_source(
 @app.get("/matches/overlap", response_model=list[OverlapMatchRow])
 def overlap_matches(limit: int = 100, db: Session = Depends(get_db)) -> list[OverlapMatchRow]:
     return list_overlap_matches(db, limit=limit)
+
+
+@app.get("/matches/overlap-trends")
+def overlap_match_trends(
+    limit: int = 200,
+    hours: int = 72,
+    max_points: int = 18,
+    db: Session = Depends(get_db),
+) -> dict:
+    overlap_rows = list_overlap_matches(db, limit=limit)
+    canonical_ids = [row.canonical_match_id for row in overlap_rows]
+    return {
+        "trends": get_overlap_home_trends(
+            db,
+            canonical_match_ids=canonical_ids,
+            hours=hours,
+            max_points=max_points,
+        )
+    }
 
 
 @app.get("/matches/{canonical_match_id}/odds-history", response_model=MatchOddsHistoryResponse)

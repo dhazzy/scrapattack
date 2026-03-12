@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
-from sqlalchemy import desc, select
+from sqlalchemy import desc, select, tuple_
 from sqlalchemy.orm import Session
 
 from odds_app.constants import DEFAULT_COMPARISON_SOURCES
@@ -61,6 +61,88 @@ def run_match_comparison_cycle(
         "overlap_matches": overlap_matches,
         "value_edge_alerts": value_edge_alerts,
     }
+
+
+def _downsample(values: list[float], max_points: int) -> list[float]:
+    if max_points <= 0:
+        return []
+    if len(values) <= max_points:
+        return values
+    if max_points == 1:
+        return [values[-1]]
+
+    step = (len(values) - 1) / (max_points - 1)
+    sampled: list[float] = []
+    used: set[int] = set()
+    for i in range(max_points):
+        idx = int(round(i * step))
+        idx = max(0, min(idx, len(values) - 1))
+        if idx in used:
+            continue
+        sampled.append(values[idx])
+        used.add(idx)
+    if sampled[-1] != values[-1]:
+        sampled[-1] = values[-1]
+    return sampled
+
+
+def get_overlap_home_trends(
+    db: Session,
+    canonical_match_ids: list[int],
+    hours: int = 72,
+    max_points: int = 18,
+    sources: tuple[str, str] = DEFAULT_COMPARISON_SOURCES,
+) -> list[dict]:
+    if not canonical_match_ids:
+        return []
+
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=max(1, hours))
+    source_events = list(
+        db.scalars(
+            select(SourceEvent)
+            .where(SourceEvent.canonical_match_id.in_(canonical_match_ids))
+            .where(SourceEvent.source.in_(list(sources)))
+            .order_by(SourceEvent.last_seen_at.desc())
+        )
+    )
+
+    latest_by_match_source: dict[tuple[int, str], SourceEvent] = {}
+    for event in source_events:
+        key = (event.canonical_match_id, event.source)
+        if key not in latest_by_match_source:
+            latest_by_match_source[key] = event
+
+    pair_to_match: dict[tuple[str, str], int] = {}
+    for (match_id, source), event in latest_by_match_source.items():
+        pair_to_match[(source, event.external_event_id)] = match_id
+
+    pairs = list(pair_to_match.keys())
+    grouped: dict[tuple[int, str], list[float]] = {}
+    if pairs:
+        snapshots = db.scalars(
+            select(OddsSnapshot)
+            .where(tuple_(OddsSnapshot.source, OddsSnapshot.external_event_id).in_(pairs))
+            .where(OddsSnapshot.market_type == "1x2")
+            .where(OddsSnapshot.selection == "home")
+            .where(OddsSnapshot.scraped_at >= cutoff)
+            .order_by(OddsSnapshot.scraped_at.asc())
+        )
+        for snap in snapshots:
+            match_id = pair_to_match.get((snap.source, snap.external_event_id))
+            if match_id is None:
+                continue
+            grouped.setdefault((match_id, snap.source), []).append(float(snap.odds_decimal))
+
+    output: list[dict] = []
+    for match_id in canonical_match_ids:
+        output.append(
+            {
+                "canonical_match_id": match_id,
+                "ps3838_home": _downsample(grouped.get((match_id, sources[0]), []), max_points),
+                "estave_home": _downsample(grouped.get((match_id, sources[1]), []), max_points),
+            }
+        )
+    return output
 
 
 def get_match_odds_history(
