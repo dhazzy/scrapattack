@@ -25,6 +25,10 @@ celery.conf.update(
             "task": "odds_app.tasks.dispatch_pending_alerts",
             "schedule": float(settings.alert_dispatch_interval_sec),
         },
+        "cleanup-old-data": {
+            "task": "odds_app.tasks.cleanup_old_data",
+            "schedule": float(settings.retention_cleanup_interval_sec),
+        },
     },
 )
 

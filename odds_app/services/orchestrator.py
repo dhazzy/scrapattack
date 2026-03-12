@@ -1,13 +1,14 @@
 import asyncio
 from dataclasses import replace
 from datetime import timedelta
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal
 
 from sqlalchemy.orm import Session
 
 from odds_app.scrapers.estave import EStaveScraper
 from odds_app.scrapers.ps3838 import PS3838Scraper
 from odds_app.services.ingest import persist_quotes_and_detect_drops
+from odds_app.services.reliability import execute_scrape_with_recovery
 from odds_app.services.value_scan import scan_value_edges
 
 
@@ -20,8 +21,20 @@ def run_pipeline_once(db: Session, simulate_drop: bool = False) -> dict:
     ps_scraper = PS3838Scraper()
     es_scraper = EStaveScraper()
 
-    ps_quotes = asyncio.run(ps_scraper.scrape_soccer())
-    es_quotes = asyncio.run(es_scraper.scrape_soccer())
+    ps_quotes, _ = execute_scrape_with_recovery(
+        db,
+        source=ps_scraper.source,
+        sport="soccer",
+        trigger="manual",
+        scrape_fn=lambda: asyncio.run(ps_scraper.scrape_soccer()),
+    )
+    es_quotes, _ = execute_scrape_with_recovery(
+        db,
+        source=es_scraper.source,
+        sport="soccer",
+        trigger="manual",
+        scrape_fn=lambda: asyncio.run(es_scraper.scrape_soccer()),
+    )
 
     ps_drop_alerts = persist_quotes_and_detect_drops(db, ps_quotes)
     es_drop_alerts = persist_quotes_and_detect_drops(db, es_quotes)

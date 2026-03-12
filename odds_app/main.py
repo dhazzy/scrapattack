@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from odds_app.config import get_settings
 from odds_app.constants import DEFAULT_COMPARISON_SOURCES
 from odds_app.db import Base, engine, get_db, ping_db
-from odds_app.models import Alert, CanonicalMatch, OddsSnapshot, SourceEvent
+from odds_app.models import Alert, CanonicalMatch, OddsSnapshot, ScrapeRun, SourceEvent
 from odds_app.schemas import (
     AlertResponse,
     ForceCompareResponse,
@@ -33,6 +33,7 @@ from odds_app.services.coverage import get_scrape_coverage_metrics, get_scrape_c
 from odds_app.services.diagnostics import run_ps3838_diagnostics_sync, run_vodds_diagnostics_sync
 from odds_app.services.match_views import list_overlap_matches, list_recent_matches, list_source_matches
 from odds_app.services.orchestrator import run_pipeline_once
+from odds_app.services.reliability import get_scrape_health_summary
 
 settings = get_settings()
 app = FastAPI(title=settings.app_name)
@@ -281,6 +282,19 @@ def dashboard() -> str:
     </table>
   </div>
 
+  <h2 class="section-title">Scrape reliability (last 6h)</h2>
+  <div id="scrape-health-meta" class="meta">Loading scrape health...</div>
+  <div class="table-wrap">
+    <table id="scrape-health-table">
+      <thead>
+        <tr>
+          <th>Source</th><th>Runs</th><th>Success %</th><th>Consecutive Failures</th><th>Avg Quotes</th><th>Avg Duration ms</th><th>Last Success</th><th>Last Failure</th><th>Last Error</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
   <h2 class="section-title">Matches on both sources (comparison)</h2>
   <div class="table-wrap">
     <table id="overlap-table">
@@ -476,6 +490,30 @@ def dashboard() -> str:
     }
   }
 
+  function renderScrapeHealth(payload) {
+    const meta = document.getElementById('scrape-health-meta');
+    const tbody = document.querySelector('#scrape-health-table tbody');
+    const generated = payload.generated_at ? formatDateUtc(payload.generated_at) : '-';
+    meta.textContent = `generated=${generated} | window=${payload.window_hours ?? 6}h`;
+
+    tbody.innerHTML = '';
+    for (const row of (payload.sources ?? [])) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${row.source}</td>
+        <td>${row.runs ?? 0}</td>
+        <td>${row.success_rate_pct ?? 0}</td>
+        <td>${row.consecutive_failures ?? 0}</td>
+        <td>${row.avg_quotes ?? 0}</td>
+        <td>${row.avg_duration_ms ?? 0}</td>
+        <td>${formatDateUtc(row.last_success_at)}</td>
+        <td>${formatDateUtc(row.last_failure_at)}</td>
+        <td>${row.last_error ?? '-'}</td>
+      `;
+      tbody.appendChild(tr);
+    }
+  }
+
   function renderSourceTable(tableId, rows) {
     const tbody = document.querySelector(`#${tableId} tbody`);
     tbody.innerHTML = '';
@@ -616,10 +654,11 @@ def dashboard() -> str:
 
 
   async function refresh() {
-    const [schedule, coverage, coverageTrend, overlap, overlapTrends, psRows, esRows, oddsDropAlerts, alerts] = await Promise.all([
+    const [schedule, coverage, coverageTrend, scrapeHealth, overlap, overlapTrends, psRows, esRows, oddsDropAlerts, alerts] = await Promise.all([
       fetchJson('/admin/next-scrape'),
       fetchJson('/admin/coverage'),
       fetchJson('/admin/coverage-trend?runs=72&bucket_minutes=5'),
+      fetchJson('/admin/scrape-health?window_hours=6'),
       fetchJson('/matches/overlap?limit=200'),
       fetchJson('/matches/overlap-trends?limit=200&hours=72&max_points=18'),
       fetchJson('/matches/source/ps3838?limit=300'),
@@ -634,6 +673,7 @@ def dashboard() -> str:
     renderSchedule(schedule);
     renderCoverage(coverage);
     renderCoverageTrend(coverageTrend);
+    renderScrapeHealth(scrapeHealth);
     renderOverlapTable(overlap, trendByMatch);
     renderSourceTable('ps-table', psRows);
     renderSourceTable('es-table', esRows);
@@ -782,7 +822,7 @@ def dashboard() -> str:
     status.textContent = 'Clearing database...';
     try {
       const out = await fetchJson('/admin/clear-db', { method: 'POST' });
-      status.textContent = `Database cleared: snapshots=${out.deleted.odds_snapshots}, alerts=${out.deleted.alerts}, source_events=${out.deleted.source_events}, canonical_matches=${out.deleted.canonical_matches}`;
+      status.textContent = `Database cleared: snapshots=${out.deleted.odds_snapshots}, alerts=${out.deleted.alerts}, source_events=${out.deleted.source_events}, canonical_matches=${out.deleted.canonical_matches}, scrape_runs=${out.deleted.scrape_runs ?? 0}`;
       await refresh();
     } catch (err) {
       status.textContent = `Clear DB failed: ${err}`;
@@ -1259,6 +1299,11 @@ def admin_coverage_trend(
     )
 
 
+@app.get("/admin/scrape-health")
+def admin_scrape_health(window_hours: int = 6, db: Session = Depends(get_db)) -> dict:
+    return get_scrape_health_summary(db, window_hours=window_hours)
+
+
 @app.post("/admin/clear-db")
 def admin_clear_db(db: Session = Depends(get_db)) -> dict:
     deleted = {
@@ -1266,12 +1311,14 @@ def admin_clear_db(db: Session = Depends(get_db)) -> dict:
         "odds_snapshots": int(db.scalar(select(func.count()).select_from(OddsSnapshot)) or 0),
         "source_events": int(db.scalar(select(func.count()).select_from(SourceEvent)) or 0),
         "canonical_matches": int(db.scalar(select(func.count()).select_from(CanonicalMatch)) or 0),
+        "scrape_runs": int(db.scalar(select(func.count()).select_from(ScrapeRun)) or 0),
     }
 
     db.query(Alert).delete(synchronize_session=False)
     db.query(OddsSnapshot).delete(synchronize_session=False)
     db.query(SourceEvent).delete(synchronize_session=False)
     db.query(CanonicalMatch).delete(synchronize_session=False)
+    db.query(ScrapeRun).delete(synchronize_session=False)
     db.commit()
 
     return {"status": "ok", "deleted": deleted}

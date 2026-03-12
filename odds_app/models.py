@@ -53,6 +53,8 @@ class SourceEvent(Base):
 
     __table_args__ = (
         UniqueConstraint("source", "external_event_id", name="uq_source_event"),
+        Index("idx_source_event_freshness", "source", "sport", "last_seen_at"),
+        Index("idx_source_event_kickoff", "source", "sport", "kickoff_utc"),
     )
 
 
@@ -84,6 +86,14 @@ class OddsSnapshot(Base):
             "selection",
             "scraped_at",
         ),
+        Index("idx_odds_source_sport_scraped", "source", "sport", "scraped_at"),
+        Index(
+            "idx_odds_market_selection_scraped",
+            "source",
+            "market_type",
+            "selection",
+            "scraped_at",
+        ),
     )
 
 
@@ -106,3 +116,30 @@ class Alert(Base):
         DateTime(timezone=True), default=utcnow, nullable=False
     )
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        Index("idx_alert_type_source_created", "alert_type", "source", "created_at"),
+        Index("idx_alert_unsent_created", "is_sent", "created_at"),
+    )
+
+
+class ScrapeRun(Base):
+    __tablename__ = "scrape_runs"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    source: Mapped[str] = mapped_column(String(32), index=True)
+    sport: Mapped[str] = mapped_column(String(32), index=True, default="soccer")
+    trigger: Mapped[str] = mapped_column(String(16), default="scheduled")
+    mode: Mapped[str] = mapped_column(String(16), default="primary")
+    success: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    quotes_count: Mapped[int] = mapped_column(default=0)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    finished_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    duration_ms: Mapped[int] = mapped_column(default=0)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("idx_scrape_run_source_sport_started", "source", "sport", "started_at"),
+        Index("idx_scrape_run_success_started", "success", "started_at"),
+    )

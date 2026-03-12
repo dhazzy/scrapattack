@@ -65,14 +65,28 @@ class Settings(BaseSettings):
     scrape_interval_sec: int = Field(default=300, alias="SCRAPE_INTERVAL_SEC")
     compare_interval_sec: int = Field(default=300, alias="COMPARE_INTERVAL_SEC")
     alert_dispatch_interval_sec: int = Field(default=30, alias="ALERT_DISPATCH_INTERVAL_SEC")
+    retention_cleanup_interval_sec: int = Field(default=3600, alias="RETENTION_CLEANUP_INTERVAL_SEC")
+    scrape_min_quotes_success: int = Field(default=1, alias="SCRAPE_MIN_QUOTES_SUCCESS")
+    scrape_recovery_retry_count: int = Field(default=1, alias="SCRAPE_RECOVERY_RETRY_COUNT")
+    scrape_recovery_backoff_sec: float = Field(default=2.0, alias="SCRAPE_RECOVERY_BACKOFF_SEC")
 
     odds_drop_threshold_pct: float = Field(default=8.0, alias="ODDS_DROP_THRESHOLD_PCT")
     odds_drop_opening_threshold_pct: float = Field(
         default=12.0, alias="ODDS_DROP_OPENING_THRESHOLD_PCT"
     )
     odds_drop_lookback_min: int = Field(default=15, alias="ODDS_DROP_LOOKBACK_MIN")
+    odds_drop_confirmation_count: int = Field(default=2, alias="ODDS_DROP_CONFIRMATION_COUNT")
+    odds_drop_confirmation_window_min: int = Field(
+        default=180, alias="ODDS_DROP_CONFIRMATION_WINDOW_MIN"
+    )
+    odds_drop_renotify_improvement_pct: float = Field(
+        default=1.5, alias="ODDS_DROP_RENOTIFY_IMPROVEMENT_PCT"
+    )
     value_edge_threshold_pct: float = Field(default=4.0, alias="VALUE_EDGE_THRESHOLD_PCT")
     alert_cooldown_min: int = Field(default=20, alias="ALERT_COOLDOWN_MIN")
+    odds_snapshot_retention_days: int = Field(default=45, alias="ODDS_SNAPSHOT_RETENTION_DAYS")
+    scrape_run_retention_days: int = Field(default=14, alias="SCRAPE_RUN_RETENTION_DAYS")
+    alert_retention_days: int = Field(default=60, alias="ALERT_RETENTION_DAYS")
 
 
 @lru_cache

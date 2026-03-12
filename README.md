@@ -32,6 +32,7 @@ Configured via:
 SCRAPE_INTERVAL_SEC=300
 COMPARE_INTERVAL_SEC=300
 ALERT_DISPATCH_INTERVAL_SEC=30
+RETENTION_CLEANUP_INTERVAL_SEC=3600
 ```
 
 ## Force refresh now (instant scrape)
@@ -54,6 +55,9 @@ UI:
 - `GET /odds/recent?limit=50`
 - `GET /matches/source/{source}?limit=100` (`source=ps3838|e_stave`)
 - `GET /matches/overlap?limit=100`
+- `GET /admin/coverage`
+- `GET /admin/coverage-trend?runs=72&bucket_minutes=5`
+- `GET /admin/scrape-health?window_hours=6`
 - `POST /admin/force-refresh`
 - `GET /admin/diagnostics/ps3838`
 - `POST /admin/diagnostics/ps3838`
@@ -95,6 +99,49 @@ e-stave depth controls (for more than the first 10-15 matches):
 ```env
 ESTAVE_PAGE_SIZE=25
 ESTAVE_MAX_PAGES_PER_QUERY=40
+```
+
+
+## Reliability + self-healing
+
+Scrape runs are now tracked in `scrape_runs` with success/failure, duration, quote counts, and error details.
+
+- Scheduled and manual scrapes use a recovery wrapper:
+  - primary attempt
+  - configurable retry attempts with backoff
+- Health endpoint for quick source-level reliability:
+
+```bash
+curl "http://localhost:8000/admin/scrape-health?window_hours=6"
+```
+
+Config:
+
+```env
+SCRAPE_MIN_QUOTES_SUCCESS=1
+SCRAPE_RECOVERY_RETRY_COUNT=1
+SCRAPE_RECOVERY_BACKOFF_SEC=2
+```
+
+## Odds-drop confirmation + dedupe
+
+Odds-drop alerts now require confirmation points over a window and re-notify only on meaningful further moves.
+
+```env
+ODDS_DROP_CONFIRMATION_COUNT=2
+ODDS_DROP_CONFIRMATION_WINDOW_MIN=180
+ODDS_DROP_RENOTIFY_IMPROVEMENT_PCT=1.5
+```
+
+## Retention cleanup
+
+Automated cleanup task removes old snapshots/scrape-runs and old sent alerts.
+
+```env
+ODDS_SNAPSHOT_RETENTION_DAYS=45
+SCRAPE_RUN_RETENTION_DAYS=14
+ALERT_RETENTION_DAYS=60
+RETENTION_CLEANUP_INTERVAL_SEC=3600
 ```
 
 ## PS3838 diagnostics
