@@ -33,7 +33,7 @@ from odds_app.services.coverage import get_scrape_coverage_metrics, get_scrape_c
 from odds_app.services.diagnostics import run_ps3838_diagnostics_sync, run_vodds_diagnostics_sync
 from odds_app.services.match_views import list_overlap_matches, list_recent_matches, list_source_matches
 from odds_app.services.orchestrator import run_pipeline_once
-from odds_app.services.reliability import get_scrape_health_summary
+from odds_app.services.reliability import get_scrape_health_summary, get_scrape_run_history
 
 settings = get_settings()
 app = FastAPI(title=settings.app_name)
@@ -79,6 +79,36 @@ def _next_scrape_payload(db: Session) -> dict:
 
 
 @app.get("/", response_class=HTMLResponse)
+def home_page() -> str:
+    return """<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Odds App</title>
+  <style>
+    body { font-family: Inter, system-ui, Arial, sans-serif; margin: 0; background: #0b1220; color: #e5edf7; }
+    .wrap { max-width: 900px; margin: 48px auto; padding: 24px; }
+    .card { border: 1px solid #233452; border-radius: 12px; padding: 18px; background: #101a2e; }
+    a { color: #8dc0ff; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .muted { color: #9eb0c9; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1 style="margin-top:0;">Sports Odds App</h1>
+      <p class="muted">Operational controls and admin dashboards were moved to a dedicated admin page.</p>
+      <p><a href="/admin">Open Admin Dashboard</a></p>
+      <p><a href="/health">API Health</a> · <a href="/health/db">DB Health</a></p>
+    </div>
+  </div>
+</body>
+</html>"""
+
+
+@app.get("/admin", response_class=HTMLResponse)
 def dashboard() -> str:
     return """<!doctype html>
 <html>
@@ -225,6 +255,8 @@ def dashboard() -> str:
     }
     #history-subtitle { margin-bottom: 8px; }
     #history-empty { margin-top: 10px; }
+    #scrape-run-history-canvas { width: 100%; height: 220px; }
+    #scrape-run-history-empty { margin-top: 6px; }
   </style>
 </head>
 <body>
@@ -293,6 +325,13 @@ def dashboard() -> str:
       </thead>
       <tbody></tbody>
     </table>
+  </div>
+
+  <h2 class="section-title">Scrape run history (success rate)</h2>
+  <div id="scrape-run-history-meta" class="meta">Loading scrape run history...</div>
+  <div class="card" style="margin-bottom:18px;">
+    <canvas id="scrape-run-history-canvas" height="120"></canvas>
+    <div id="scrape-run-history-empty" class="hint" style="display:none;">No scrape run history available in selected window.</div>
   </div>
 
   <h2 class="section-title">Matches on both sources (comparison)</h2>
@@ -391,6 +430,7 @@ def dashboard() -> str:
 <script>
   let nextScrapeAtMs = null;
   let oddsHistoryChart = null;
+  let scrapeRunHistoryChart = null;
 
   async function fetchJson(url, options = {}) {
     const res = await fetch(url, options);
@@ -512,6 +552,64 @@ def dashboard() -> str:
       `;
       tbody.appendChild(tr);
     }
+  }
+
+  function runHistoryColor(source) {
+    const bySource = {
+      ps3838: '#4ea1ff',
+      e_stave: '#f6a75a',
+    };
+    return bySource[source] || '#9dd5ff';
+  }
+
+  function renderScrapeRunHistory(payload) {
+    const meta = document.getElementById('scrape-run-history-meta');
+    const empty = document.getElementById('scrape-run-history-empty');
+    const canvas = document.getElementById('scrape-run-history-canvas');
+    const generated = payload.generated_at ? formatDateUtc(payload.generated_at) : '-';
+    meta.textContent = `generated=${generated} | runs=${payload.runs ?? '-'} | hours=${payload.hours ?? 24} | bucket=${payload.bucket_minutes ?? 15}m`;
+
+    if (scrapeRunHistoryChart) {
+      scrapeRunHistoryChart.destroy();
+      scrapeRunHistoryChart = null;
+    }
+
+    const buckets = payload.buckets ?? [];
+    const datasets = (payload.series ?? []).map((row) => ({
+      label: `${row.source} success %`,
+      data: buckets.map((bucket, idx) => ({ x: bucket, y: row.success_rate_pct?.[idx] ?? null })),
+      borderColor: runHistoryColor(row.source),
+      backgroundColor: runHistoryColor(row.source),
+      borderWidth: 2,
+      pointRadius: 0,
+      tension: 0.18,
+      spanGaps: true,
+    }));
+
+    const hasPoints = datasets.some((ds) => ds.data.some((p) => p.y != null));
+    if (!hasPoints) {
+      empty.style.display = 'block';
+      canvas.style.display = 'none';
+      return;
+    }
+
+    empty.style.display = 'none';
+    canvas.style.display = 'block';
+    scrapeRunHistoryChart = new Chart(canvas.getContext('2d'), {
+      type: 'line',
+      data: { datasets },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+          x: { type: 'time', ticks: { color: '#c6d3e8' }, grid: { color: '#223450' } },
+          y: { min: 0, max: 100, ticks: { color: '#c6d3e8' }, grid: { color: '#223450' } },
+        },
+        plugins: {
+          legend: { labels: { color: '#dce8f8' } },
+        },
+      },
+    });
   }
 
   function renderSourceTable(tableId, rows) {
@@ -654,11 +752,12 @@ def dashboard() -> str:
 
 
   async function refresh() {
-    const [schedule, coverage, coverageTrend, scrapeHealth, overlap, overlapTrends, psRows, esRows, oddsDropAlerts, alerts] = await Promise.all([
+    const [schedule, coverage, coverageTrend, scrapeHealth, scrapeRunHistory, overlap, overlapTrends, psRows, esRows, oddsDropAlerts, alerts] = await Promise.all([
       fetchJson('/admin/next-scrape'),
       fetchJson('/admin/coverage'),
       fetchJson('/admin/coverage-trend?runs=72&bucket_minutes=5'),
       fetchJson('/admin/scrape-health?window_hours=6'),
+      fetchJson('/admin/scrape-runs/history?hours=24&bucket_minutes=5&runs=288'),
       fetchJson('/matches/overlap?limit=200'),
       fetchJson('/matches/overlap-trends?limit=200&hours=72&max_points=18'),
       fetchJson('/matches/source/ps3838?limit=300'),
@@ -674,6 +773,7 @@ def dashboard() -> str:
     renderCoverage(coverage);
     renderCoverageTrend(coverageTrend);
     renderScrapeHealth(scrapeHealth);
+    renderScrapeRunHistory(scrapeRunHistory);
     renderOverlapTable(overlap, trendByMatch);
     renderSourceTable('ps-table', psRows);
     renderSourceTable('es-table', esRows);
@@ -945,7 +1045,7 @@ def match_details_page(canonical_match_id: int) -> str:
 </head>
 <body>
   <div class="container">
-    <div style="margin-bottom:8px;"><a href="/">← Back to dashboard</a></div>
+    <div style="margin-bottom:8px;"><a href="/admin">← Back to dashboard</a></div>
     <h1 id="title">Match #__ID__</h1>
     <div id="subtitle" class="meta">Loading match details...</div>
 
@@ -1302,6 +1402,21 @@ def admin_coverage_trend(
 @app.get("/admin/scrape-health")
 def admin_scrape_health(window_hours: int = 6, db: Session = Depends(get_db)) -> dict:
     return get_scrape_health_summary(db, window_hours=window_hours)
+
+
+@app.get("/admin/scrape-runs/history")
+def admin_scrape_runs_history(
+    hours: int = 24,
+    bucket_minutes: int = 15,
+    runs: int | None = None,
+    db: Session = Depends(get_db),
+) -> dict:
+    return get_scrape_run_history(
+        db,
+        hours=hours,
+        bucket_minutes=bucket_minutes,
+        runs=runs,
+    )
 
 
 @app.post("/admin/clear-db")

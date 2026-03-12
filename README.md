@@ -44,11 +44,12 @@ curl -X POST http://localhost:8000/admin/force-refresh
 ```
 
 UI:
-- Open `/` and click **Force refresh now**
+- Open `/admin` and click **Force refresh now**
 
 ## Main API endpoints
 
-- `GET /` dashboard UI
+- `GET /` landing page (links to admin)
+- `GET /admin` admin dashboard UI
 - `GET /health`
 - `GET /health/db`
 - `GET /alerts/recent?limit=50`
@@ -58,6 +59,7 @@ UI:
 - `GET /admin/coverage`
 - `GET /admin/coverage-trend?runs=72&bucket_minutes=5`
 - `GET /admin/scrape-health?window_hours=6`
+- `GET /admin/scrape-runs/history?hours=24&bucket_minutes=5&runs=288`
 - `POST /admin/force-refresh`
 - `GET /admin/diagnostics/ps3838`
 - `POST /admin/diagnostics/ps3838`

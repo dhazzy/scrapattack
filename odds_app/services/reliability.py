@@ -6,6 +6,7 @@ from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from odds_app.config import get_settings
+from odds_app.constants import DEFAULT_COMPARISON_SOURCES
 from odds_app.models import ScrapeRun
 from odds_app.scrapers.base import OddsQuote
 
@@ -20,6 +21,11 @@ def _trim_error(value: str | None, max_len: int = 1200) -> str | None:
     if not value:
         return None
     return value[:max_len]
+
+
+def _floor_bucket(value: datetime, bucket_minutes: int) -> datetime:
+    minute_bucket = (value.minute // bucket_minutes) * bucket_minutes
+    return value.replace(minute=minute_bucket, second=0, microsecond=0)
 
 
 def _record_scrape_run(
@@ -201,4 +207,94 @@ def get_scrape_health_summary(db: Session, window_hours: int = 6, per_source_lim
         "generated_at": now.isoformat(),
         "window_hours": window_hours,
         "sources": summary,
+    }
+
+
+def get_scrape_run_history(
+    db: Session,
+    hours: int = 24,
+    bucket_minutes: int = 15,
+    runs: int | None = None,
+    sources: tuple[str, ...] = DEFAULT_COMPARISON_SOURCES,
+) -> dict:
+    now = _utcnow()
+    hours = max(1, int(hours))
+    bucket_minutes = max(1, int(bucket_minutes))
+    cutoff = now - timedelta(hours=hours)
+
+    rows = list(
+        db.scalars(
+            select(ScrapeRun)
+            .where(ScrapeRun.started_at >= cutoff)
+            .order_by(ScrapeRun.started_at.asc())
+        )
+    )
+
+    first_bucket = _floor_bucket(cutoff, bucket_minutes)
+    last_bucket = _floor_bucket(now, bucket_minutes)
+    buckets: list[datetime] = []
+    cursor = first_bucket
+    while cursor <= last_bucket:
+        buckets.append(cursor)
+        cursor = cursor + timedelta(minutes=bucket_minutes)
+
+    bucket_index = {bucket: idx for idx, bucket in enumerate(buckets)}
+    observed_sources = sorted({run.source for run in rows})
+    source_list = sorted(set(sources) | set(observed_sources))
+    attempts = {source: [0 for _ in buckets] for source in source_list}
+    successes = {source: [0 for _ in buckets] for source in source_list}
+    quote_sums = {source: [0 for _ in buckets] for source in source_list}
+
+    for run in rows:
+        bucket = _floor_bucket(run.started_at, bucket_minutes)
+        idx = bucket_index.get(bucket)
+        if idx is None:
+            continue
+        source = run.source
+        attempts[source][idx] += 1
+        successes[source][idx] += 1 if run.success else 0
+        quote_sums[source][idx] += int(run.quotes_count)
+
+    runs_limit = max(1, int(runs)) if runs is not None else None
+    if runs_limit is not None:
+        buckets = buckets[-runs_limit:]
+
+    series = []
+    for source in source_list:
+        source_attempts = attempts[source]
+        source_successes = successes[source]
+        source_quote_sums = quote_sums[source]
+        if runs_limit is not None:
+            source_attempts = source_attempts[-runs_limit:]
+            source_successes = source_successes[-runs_limit:]
+            source_quote_sums = source_quote_sums[-runs_limit:]
+        success_rate_pct = [
+            round((source_successes[i] / source_attempts[i]) * 100, 2)
+            if source_attempts[i] > 0
+            else None
+            for i in range(len(source_attempts))
+        ]
+        avg_quotes = [
+            round(source_quote_sums[i] / source_attempts[i], 2)
+            if source_attempts[i] > 0
+            else None
+            for i in range(len(source_attempts))
+        ]
+        series.append(
+            {
+                "source": source,
+                "attempt_counts": source_attempts,
+                "success_counts": source_successes,
+                "success_rate_pct": success_rate_pct,
+                "avg_quotes": avg_quotes,
+            }
+        )
+
+    return {
+        "generated_at": now.isoformat(),
+        "hours": hours,
+        "bucket_minutes": bucket_minutes,
+        "runs": runs_limit,
+        "buckets": [bucket.isoformat() for bucket in buckets],
+        "series": series,
     }
