@@ -330,6 +330,12 @@ def dashboard() -> str:
   <h2 class="section-title">Scrape run history (success rate)</h2>
   <div id="scrape-run-history-meta" class="meta">Loading scrape run history...</div>
   <div class="card" style="margin-bottom:18px;">
+    <div style="display:flex;justify-content:flex-end;align-items:center;gap:8px;margin-bottom:8px;">
+      <label for="scrape-run-source-filter" class="hint">Source</label>
+      <select id="scrape-run-source-filter" style="background:#0b1220;color:#e5edf7;border:1px solid #233452;border-radius:8px;padding:6px;">
+        <option value="all">All sources</option>
+      </select>
+    </div>
     <canvas id="scrape-run-history-canvas" height="120"></canvas>
     <div id="scrape-run-history-empty" class="hint" style="display:none;">No scrape run history available in selected window.</div>
   </div>
@@ -431,6 +437,7 @@ def dashboard() -> str:
   let nextScrapeAtMs = null;
   let oddsHistoryChart = null;
   let scrapeRunHistoryChart = null;
+  let scrapeRunHistoryPayload = null;
 
   async function fetchJson(url, options = {}) {
     const res = await fetch(url, options);
@@ -562,12 +569,44 @@ def dashboard() -> str:
     return bySource[source] || '#9dd5ff';
   }
 
+  function selectedRunHistorySource() {
+    const el = document.getElementById('scrape-run-source-filter');
+    return el ? (el.value || 'all') : 'all';
+  }
+
+  function syncRunHistoryFilterOptions(payload) {
+    const el = document.getElementById('scrape-run-source-filter');
+    if (!el) return;
+    const current = el.value || 'all';
+    const sources = [...new Set((payload.series ?? []).map((row) => row.source).filter(Boolean))].sort();
+    const desired = ['all', ...sources];
+    const same =
+      el.options.length === desired.length &&
+      desired.every((value, idx) => el.options[idx].value === value);
+
+    if (!same) {
+      el.innerHTML = '';
+      for (const value of desired) {
+        const opt = document.createElement('option');
+        opt.value = value;
+        opt.textContent = value === 'all' ? 'All sources' : value;
+        el.appendChild(opt);
+      }
+    }
+
+    el.value = desired.includes(current) ? current : 'all';
+  }
+
   function renderScrapeRunHistory(payload) {
+    scrapeRunHistoryPayload = payload;
+    syncRunHistoryFilterOptions(payload);
+
     const meta = document.getElementById('scrape-run-history-meta');
     const empty = document.getElementById('scrape-run-history-empty');
     const canvas = document.getElementById('scrape-run-history-canvas');
+    const sourceFilter = selectedRunHistorySource();
     const generated = payload.generated_at ? formatDateUtc(payload.generated_at) : '-';
-    meta.textContent = `generated=${generated} | runs=${payload.runs ?? '-'} | hours=${payload.hours ?? 24} | bucket=${payload.bucket_minutes ?? 15}m`;
+    meta.textContent = `generated=${generated} | source=${sourceFilter} | runs=${payload.runs ?? '-'} | hours=${payload.hours ?? 24} | bucket=${payload.bucket_minutes ?? 15}m`;
 
     if (scrapeRunHistoryChart) {
       scrapeRunHistoryChart.destroy();
@@ -575,7 +614,10 @@ def dashboard() -> str:
     }
 
     const buckets = payload.buckets ?? [];
-    const datasets = (payload.series ?? []).map((row) => ({
+    const filteredSeries = (payload.series ?? []).filter(
+      (row) => sourceFilter === 'all' || row.source === sourceFilter,
+    );
+    const datasets = filteredSeries.map((row) => ({
       label: `${row.source} success %`,
       data: buckets.map((bucket, idx) => ({ x: bucket, y: row.success_rate_pct?.[idx] ?? null })),
       borderColor: runHistoryColor(row.source),
@@ -940,6 +982,15 @@ def dashboard() -> str:
       closeHistoryModal();
     }
   });
+
+  const scrapeRunFilterEl = document.getElementById('scrape-run-source-filter');
+  if (scrapeRunFilterEl) {
+    scrapeRunFilterEl.addEventListener('change', () => {
+      if (scrapeRunHistoryPayload) {
+        renderScrapeRunHistory(scrapeRunHistoryPayload);
+      }
+    });
+  }
 
   refresh();
   setInterval(refresh, 30000);
