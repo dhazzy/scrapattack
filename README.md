@@ -58,7 +58,9 @@ UI:
 - `GET /matches/overlap?limit=100`
 - `GET /admin/coverage`
 - `GET /admin/coverage-trend?runs=72&bucket_minutes=5`
+- `GET /admin/coverage-gaps?days=14`
 - `GET /admin/scrape-health?window_hours=6`
+- `GET /admin/canary?create_alerts=false`
 - `GET /admin/scrape-runs/history?hours=24&bucket_minutes=5&runs=288`
 - `GET /admin/scrape-runs/recent?limit=150`
 - `GET /admin/runtime-overrides`
@@ -66,6 +68,8 @@ UI:
 - `POST /admin/runtime-overrides/reset`
 - `GET /admin/export/overlap.csv?limit=1000`
 - `GET /admin/export/alerts.csv?limit=2000&alert_type=all`
+- `POST /admin/probe/estave?persist=false`
+- `POST /admin/probe/vodds?persist=false`
 - `POST /admin/force-refresh`
 - `GET /admin/diagnostics/ps3838`
 - `POST /admin/diagnostics/ps3838`
@@ -131,9 +135,51 @@ SCRAPE_RECOVERY_RETRY_COUNT=1
 SCRAPE_RECOVERY_BACKOFF_SEC=2
 SCRAPE_DEGRADED_CONSECUTIVE_FAILURES=3
 SCRAPE_DEGRADED_COOLDOWN_SEC=600
+SCRAPE_BACKFILL_NEAR_INTERVAL_SEC=1800
+SCRAPE_BACKFILL_FAR_INTERVAL_SEC=3600
+SCRAPE_BACKFILL_NEAR_MIN_HOURS=24
+SCRAPE_BACKFILL_NEAR_MAX_HOURS=72
+SCRAPE_BACKFILL_FAR_MIN_HOURS=72
+SCRAPE_BACKFILL_FAR_MAX_HOURS=336
 ```
 
 ## Runtime controls + exports
+
+## Probe routes (manual coverage tuning)
+
+Use probe routes to test deeper scrape settings and upcoming windows before changing global env values:
+
+```bash
+curl -X POST "http://localhost:8000/admin/probe/estave?persist=false" \
+  -H "Content-Type: application/json" \
+  -d '{"sports":["soccer"],"min_days":0,"max_days":14,"max_pages_per_query":90,"extra_b_values":"13,14"}'
+
+curl -X POST "http://localhost:8000/admin/probe/vodds?persist=false" \
+  -H "Content-Type: application/json" \
+  -d '{"sports":["soccer","tennis","basketball"],"min_days":0,"max_days":14}'
+```
+
+Set `persist=true` to save probe quotes into DB and run odds-drop detection.
+
+## Canary checks
+
+A scheduled canary validates scraper reliability and upcoming coverage. On failure it can create `canary_failure` alerts (cooldown protected).
+
+```env
+CANARY_INTERVAL_SEC=900
+CANARY_WINDOW_HOURS=6
+CANARY_MIN_SUCCESS_RATE_PCT=70.0
+CANARY_MIN_AVG_QUOTES=5.0
+CANARY_MIN_UPCOMING_72H=20
+CANARY_MIN_UPCOMING_168H=50
+CANARY_ALERT_COOLDOWN_MIN=120
+```
+
+Manual run:
+
+```bash
+curl "http://localhost:8000/admin/canary?create_alerts=false"
+```
 
 The admin page now includes:
 

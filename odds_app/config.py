@@ -58,6 +58,11 @@ class Settings(BaseSettings):
     )
     estave_extra_b_values: str = Field(default="", alias="ESTAVE_EXTRA_B_VALUES")
     estave_g_values: str = Field(default="25", alias="ESTAVE_G_VALUES")
+    estave_backfill_max_pages_per_query: int = Field(
+        default=80, alias="ESTAVE_BACKFILL_MAX_PAGES_PER_QUERY"
+    )
+    estave_backfill_extra_b_values: str = Field(default="", alias="ESTAVE_BACKFILL_EXTRA_B_VALUES")
+    estave_backfill_g_values: str = Field(default="", alias="ESTAVE_BACKFILL_G_VALUES")
 
     scraper_request_timeout_sec: float = Field(default=30.0, alias="SCRAPER_REQUEST_TIMEOUT_SEC")
     scraper_enable_playwright: bool = Field(default=True, alias="SCRAPER_ENABLE_PLAYWRIGHT")
@@ -73,6 +78,23 @@ class Settings(BaseSettings):
         default=3, alias="SCRAPE_DEGRADED_CONSECUTIVE_FAILURES"
     )
     scrape_degraded_cooldown_sec: int = Field(default=600, alias="SCRAPE_DEGRADED_COOLDOWN_SEC")
+    scrape_backfill_near_interval_sec: int = Field(
+        default=1800, alias="SCRAPE_BACKFILL_NEAR_INTERVAL_SEC"
+    )
+    scrape_backfill_far_interval_sec: int = Field(
+        default=3600, alias="SCRAPE_BACKFILL_FAR_INTERVAL_SEC"
+    )
+    scrape_backfill_near_min_hours: int = Field(default=24, alias="SCRAPE_BACKFILL_NEAR_MIN_HOURS")
+    scrape_backfill_near_max_hours: int = Field(default=72, alias="SCRAPE_BACKFILL_NEAR_MAX_HOURS")
+    scrape_backfill_far_min_hours: int = Field(default=72, alias="SCRAPE_BACKFILL_FAR_MIN_HOURS")
+    scrape_backfill_far_max_hours: int = Field(default=336, alias="SCRAPE_BACKFILL_FAR_MAX_HOURS")
+    canary_interval_sec: int = Field(default=900, alias="CANARY_INTERVAL_SEC")
+    canary_window_hours: int = Field(default=6, alias="CANARY_WINDOW_HOURS")
+    canary_min_success_rate_pct: float = Field(default=70.0, alias="CANARY_MIN_SUCCESS_RATE_PCT")
+    canary_min_avg_quotes: float = Field(default=5.0, alias="CANARY_MIN_AVG_QUOTES")
+    canary_min_upcoming_72h: int = Field(default=20, alias="CANARY_MIN_UPCOMING_72H")
+    canary_min_upcoming_168h: int = Field(default=50, alias="CANARY_MIN_UPCOMING_168H")
+    canary_alert_cooldown_min: int = Field(default=120, alias="CANARY_ALERT_COOLDOWN_MIN")
 
     odds_drop_threshold_pct: float = Field(default=8.0, alias="ODDS_DROP_THRESHOLD_PCT")
     odds_drop_opening_threshold_pct: float = Field(

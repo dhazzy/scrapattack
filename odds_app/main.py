@@ -1,3 +1,4 @@
+import asyncio
 import csv
 import json
 import time
@@ -32,10 +33,17 @@ from odds_app.services.comparison import (
     get_overlap_home_trends,
     run_match_comparison_cycle,
 )
-from odds_app.services.coverage import get_scrape_coverage_metrics, get_scrape_coverage_trend
+from odds_app.services.coverage import (
+    get_scrape_coverage_gaps,
+    get_scrape_coverage_metrics,
+    get_scrape_coverage_trend,
+)
 from odds_app.services.diagnostics import run_ps3838_diagnostics_sync, run_vodds_diagnostics_sync
 from odds_app.services.match_views import list_overlap_matches, list_recent_matches, list_source_matches
+from odds_app.services.canary import run_scrape_canary_checks
+from odds_app.services.ingest import persist_quotes_and_detect_drops
 from odds_app.services.orchestrator import run_pipeline_once
+from odds_app.services.probing import probe_estave_scrape, probe_vodds_scrape
 from odds_app.services.reliability import (
     get_scrape_health_summary,
     get_scrape_run_history,
@@ -89,6 +97,37 @@ def _next_scrape_payload(db: Session) -> dict:
         "next_scrape_at": next_at.isoformat(),
         "seconds_until_next": seconds_left,
     }
+
+
+def _sports_from_probe_payload(payload: dict) -> list[str] | None:
+    raw = payload.get("sports")
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        items = [part.strip() for part in raw.split(",")]
+    elif isinstance(raw, list):
+        items = [str(item).strip() for item in raw]
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="sports must be an array or comma-separated string",
+        )
+    normalized = [item for item in items if item]
+    return normalized or None
+
+
+def _optional_bool(value: object) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "y", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "n", "off"}:
+            return False
+    raise HTTPException(status_code=400, detail="headless must be boolean")
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -1633,6 +1672,87 @@ def admin_coverage_trend(
         bucket_minutes=bucket_minutes,
         runs=runs,
     )
+
+
+@app.get("/admin/coverage-gaps")
+def admin_coverage_gaps(days: int = 14, db: Session = Depends(get_db)) -> dict:
+    return get_scrape_coverage_gaps(db, days=days)
+
+
+@app.get("/admin/canary")
+def admin_canary(create_alerts: bool = False, db: Session = Depends(get_db)) -> dict:
+    return run_scrape_canary_checks(db, create_alerts=create_alerts)
+
+
+@app.post("/admin/probe/estave")
+def admin_probe_estave(
+    payload: dict = Body(default_factory=dict),
+    persist: bool = False,
+    db: Session = Depends(get_db),
+) -> dict:
+    sports = _sports_from_probe_payload(payload)
+    try:
+        quotes, summary = asyncio.run(
+            probe_estave_scrape(
+                sports=sports,
+                min_days=float(payload.get("min_days", 0.0) or 0.0),
+                max_days=float(payload.get("max_days", 14.0) or 14.0),
+                max_pages_per_query=(
+                    int(payload["max_pages_per_query"])
+                    if payload.get("max_pages_per_query") is not None
+                    else None
+                ),
+                page_size=(int(payload["page_size"]) if payload.get("page_size") is not None else None),
+                g_values=(str(payload["g_values"]) if payload.get("g_values") is not None else None),
+                extra_b_values=(
+                    str(payload["extra_b_values"]) if payload.get("extra_b_values") is not None else None
+                ),
+            )
+        )
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=f"invalid estave probe payload: {exc}") from exc
+
+    alerts_created = 0
+    if persist:
+        alerts_created = persist_quotes_and_detect_drops(db, quotes)
+    return {
+        "persisted": bool(persist),
+        "alerts_created": alerts_created,
+        "summary": summary,
+    }
+
+
+@app.post("/admin/probe/vodds")
+def admin_probe_vodds(
+    payload: dict = Body(default_factory=dict),
+    persist: bool = False,
+    db: Session = Depends(get_db),
+) -> dict:
+    sports = _sports_from_probe_payload(payload)
+    try:
+        quotes, summary = asyncio.run(
+            probe_vodds_scrape(
+                sports=sports,
+                min_days=float(payload.get("min_days", 0.0) or 0.0),
+                max_days=float(payload.get("max_days", 14.0) or 14.0),
+                timeout_sec=(
+                    float(payload["timeout_sec"]) if payload.get("timeout_sec") is not None else None
+                ),
+                headless=_optional_bool(payload.get("headless")),
+                proxy_url=(str(payload["proxy_url"]) if payload.get("proxy_url") else None),
+            )
+        )
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=f"invalid vodds probe payload: {exc}") from exc
+
+    alerts_created = 0
+    if persist:
+        alerts_created = persist_quotes_and_detect_drops(db, quotes)
+    return {
+        "persisted": bool(persist),
+        "alerts_created": alerts_created,
+        "summary": summary,
+    }
 
 
 @app.get("/admin/scrape-health")

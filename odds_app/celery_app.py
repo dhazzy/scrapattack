@@ -21,6 +21,22 @@ celery.conf.update(
             "task": "odds_app.tasks.reconcile_and_compare_matches",
             "schedule": float(settings.compare_interval_sec),
         },
+        "scrape-ps3838-backfill-near": {
+            "task": "odds_app.tasks.scrape_ps3838_backfill_near",
+            "schedule": float(settings.scrape_backfill_near_interval_sec),
+        },
+        "scrape-ps3838-backfill-far": {
+            "task": "odds_app.tasks.scrape_ps3838_backfill_far",
+            "schedule": float(settings.scrape_backfill_far_interval_sec),
+        },
+        "scrape-estave-backfill-near": {
+            "task": "odds_app.tasks.scrape_estave_backfill_near",
+            "schedule": float(settings.scrape_backfill_near_interval_sec),
+        },
+        "scrape-estave-backfill-far": {
+            "task": "odds_app.tasks.scrape_estave_backfill_far",
+            "schedule": float(settings.scrape_backfill_far_interval_sec),
+        },
         "dispatch-alerts": {
             "task": "odds_app.tasks.dispatch_pending_alerts",
             "schedule": float(settings.alert_dispatch_interval_sec),
@@ -28,6 +44,10 @@ celery.conf.update(
         "cleanup-old-data": {
             "task": "odds_app.tasks.cleanup_old_data",
             "schedule": float(settings.retention_cleanup_interval_sec),
+        },
+        "run-scrape-canary-checks": {
+            "task": "odds_app.tasks.run_scrape_canary_checks",
+            "schedule": float(settings.canary_interval_sec),
         },
     },
 )

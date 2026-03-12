@@ -9,13 +9,74 @@ from odds_app.models import Alert, OddsSnapshot, ScrapeRun
 from odds_app.scrapers.estave import EStaveScraper
 from odds_app.scrapers.ps3838 import PS3838Scraper
 from odds_app.services.alerts import TelegramNotifier, list_unsent_alerts, mark_alert_sent
+from odds_app.services.canary import run_scrape_canary_checks
 from odds_app.services.comparison import run_match_comparison_cycle
+from odds_app.services.horizons import filter_quotes_by_horizon
 from odds_app.services.ingest import persist_quotes_and_detect_drops
 from odds_app.services.orchestrator import run_pipeline_once
 from odds_app.services.reliability import execute_scrape_with_recovery
 from odds_app.services.value_scan import scan_value_edges
 
 logger = logging.getLogger(__name__)
+
+
+def _apply_estave_backfill_overrides(scraper: EStaveScraper) -> dict:
+    settings = get_settings()
+    scraper.settings = scraper.settings.model_copy(deep=True)
+
+    applied = {
+        "estave_max_pages_per_query": max(
+            int(scraper.settings.estave_max_pages_per_query),
+            int(settings.estave_backfill_max_pages_per_query),
+        ),
+        "estave_extra_b_values": scraper.settings.estave_extra_b_values,
+        "estave_g_values": scraper.settings.estave_g_values,
+    }
+
+    scraper.settings.estave_max_pages_per_query = applied["estave_max_pages_per_query"]
+    if settings.estave_backfill_extra_b_values.strip():
+        scraper.settings.estave_extra_b_values = settings.estave_backfill_extra_b_values
+        applied["estave_extra_b_values"] = scraper.settings.estave_extra_b_values
+    if settings.estave_backfill_g_values.strip():
+        scraper.settings.estave_g_values = settings.estave_backfill_g_values
+        applied["estave_g_values"] = scraper.settings.estave_g_values
+
+    return applied
+
+
+def _run_horizon_scrape_task(
+    *,
+    source: str,
+    scrape_fn,
+    min_hours: int,
+    max_hours: int,
+    sport_label: str,
+    trigger: str,
+) -> dict:
+    with SessionLocal() as db:
+        raw_quotes, scrape_meta = execute_scrape_with_recovery(
+            db,
+            source=source,
+            sport=sport_label,
+            trigger=trigger,
+            scrape_fn=scrape_fn,
+        )
+        horizon_quotes = filter_quotes_by_horizon(
+            raw_quotes,
+            min_hours=min_hours,
+            max_hours=max_hours,
+            require_kickoff=True,
+        )
+        alert_count = persist_quotes_and_detect_drops(db, horizon_quotes)
+    return {
+        "source": source,
+        "trigger": trigger,
+        "horizon": {"min_hours": min_hours, "max_hours": max_hours},
+        "raw_quotes": len(raw_quotes),
+        "quotes": len(horizon_quotes),
+        "alerts_created": alert_count,
+        "scrape": scrape_meta,
+    }
 
 
 @celery.task(name="odds_app.tasks.scrape_ps3838_soccer")
@@ -62,6 +123,74 @@ def scrape_estave_soccer() -> dict:
     return result
 
 
+@celery.task(name="odds_app.tasks.scrape_ps3838_backfill_near")
+def scrape_ps3838_backfill_near() -> dict:
+    settings = get_settings()
+    scraper = PS3838Scraper()
+    result = _run_horizon_scrape_task(
+        source=scraper.source,
+        scrape_fn=lambda: asyncio.run(scraper.scrape_soccer()),
+        min_hours=settings.scrape_backfill_near_min_hours,
+        max_hours=settings.scrape_backfill_near_max_hours,
+        sport_label="mixed",
+        trigger="scheduled_backfill",
+    )
+    logger.info("PS3838 backfill near result: %s", result)
+    return result
+
+
+@celery.task(name="odds_app.tasks.scrape_ps3838_backfill_far")
+def scrape_ps3838_backfill_far() -> dict:
+    settings = get_settings()
+    scraper = PS3838Scraper()
+    result = _run_horizon_scrape_task(
+        source=scraper.source,
+        scrape_fn=lambda: asyncio.run(scraper.scrape_soccer()),
+        min_hours=settings.scrape_backfill_far_min_hours,
+        max_hours=settings.scrape_backfill_far_max_hours,
+        sport_label="mixed",
+        trigger="scheduled_backfill",
+    )
+    logger.info("PS3838 backfill far result: %s", result)
+    return result
+
+
+@celery.task(name="odds_app.tasks.scrape_estave_backfill_near")
+def scrape_estave_backfill_near() -> dict:
+    settings = get_settings()
+    scraper = EStaveScraper()
+    applied = _apply_estave_backfill_overrides(scraper)
+    result = _run_horizon_scrape_task(
+        source=scraper.source,
+        scrape_fn=lambda: asyncio.run(scraper.scrape_soccer()),
+        min_hours=settings.scrape_backfill_near_min_hours,
+        max_hours=settings.scrape_backfill_near_max_hours,
+        sport_label="mixed",
+        trigger="scheduled_backfill",
+    )
+    result["applied_overrides"] = applied
+    logger.info("e-stave backfill near result: %s", result)
+    return result
+
+
+@celery.task(name="odds_app.tasks.scrape_estave_backfill_far")
+def scrape_estave_backfill_far() -> dict:
+    settings = get_settings()
+    scraper = EStaveScraper()
+    applied = _apply_estave_backfill_overrides(scraper)
+    result = _run_horizon_scrape_task(
+        source=scraper.source,
+        scrape_fn=lambda: asyncio.run(scraper.scrape_soccer()),
+        min_hours=settings.scrape_backfill_far_min_hours,
+        max_hours=settings.scrape_backfill_far_max_hours,
+        sport_label="mixed",
+        trigger="scheduled_backfill",
+    )
+    result["applied_overrides"] = applied
+    logger.info("e-stave backfill far result: %s", result)
+    return result
+
+
 @celery.task(name="odds_app.tasks.compare_value_edges")
 def compare_value_edges() -> dict:
     with SessionLocal() as db:
@@ -76,6 +205,14 @@ def reconcile_and_compare_matches() -> dict:
     with SessionLocal() as db:
         result = run_match_comparison_cycle(db)
     logger.info("Reconcile+compare result: %s", result)
+    return result
+
+
+@celery.task(name="odds_app.tasks.run_scrape_canary_checks")
+def run_scrape_canary_checks_task() -> dict:
+    with SessionLocal() as db:
+        result = run_scrape_canary_checks(db, create_alerts=True)
+    logger.info("Scrape canary result: %s", result)
     return result
 
 
