@@ -663,14 +663,14 @@ def dashboard() -> str:
 
 @app.get("/matches/{canonical_match_id}/details", response_class=HTMLResponse)
 def match_details_page(canonical_match_id: int) -> str:
-    return f"""<!doctype html>
+    html = """<!doctype html>
 <html>
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>Match Details #{canonical_match_id}</title>
+  <title>Match Details #__ID__</title>
   <style>
-    :root {{
+    :root {
       --bg: #0b1220;
       --panel: #101a2e;
       --panel-2: #0f1729;
@@ -678,55 +678,122 @@ def match_details_page(canonical_match_id: int) -> str:
       --muted: #9eb0c9;
       --border: #233452;
       --table-head: #14213b;
-    }}
-    * {{ box-sizing: border-box; }}
-    body {{
+    }
+    * { box-sizing: border-box; }
+    body {
       margin: 0;
       font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
       background: radial-gradient(circle at top, #12203b, var(--bg) 45%);
       color: var(--text);
       padding: 16px;
-    }}
-    .container {{ max-width: 1400px; margin: 0 auto; }}
-    a {{ color: #8dc0ff; text-decoration: none; }}
-    a:hover {{ text-decoration: underline; }}
-    h1 {{ margin: 0 0 6px; }}
-    .meta {{ color: var(--muted); margin-bottom: 12px; font-size: 13px; }}
-    .card {{
+    }
+    .container { max-width: 1400px; margin: 0 auto; }
+    a { color: #8dc0ff; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    h1 { margin: 0 0 6px; }
+    .meta { color: var(--muted); margin-bottom: 12px; font-size: 13px; }
+    .card {
       background: linear-gradient(180deg, var(--panel), var(--panel-2));
       border: 1px solid var(--border);
       border-radius: 10px;
       padding: 12px;
       margin-bottom: 12px;
-    }}
-    .table-wrap {{
+    }
+    .controls {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    .control { display: flex; flex-direction: column; gap: 4px; }
+    .control label { color: var(--muted); font-size: 12px; }
+    .control select,
+    .control input {
+      background: #0b1220;
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px;
+      font-size: 12px;
+    }
+    .control.actions {
+      justify-content: flex-end;
+      flex-direction: row;
+      align-items: flex-end;
+      gap: 8px;
+    }
+    button {
+      border: 1px solid var(--border);
+      background: #17305d;
+      color: white;
+      padding: 8px 12px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 12px;
+      height: 34px;
+    }
+    button:hover { filter: brightness(1.08); }
+    .table-wrap {
       border: 1px solid var(--border);
       border-radius: 10px;
       overflow: auto;
       background: var(--panel-2);
-    }}
-    table {{ border-collapse: collapse; width: 100%; min-width: 1000px; }}
-    th, td {{
+    }
+    table { border-collapse: collapse; width: 100%; min-width: 1000px; }
+    th, td {
       border-bottom: 1px solid #1f2f4d;
       padding: 8px;
       font-size: 12px;
       white-space: nowrap;
       text-align: left;
-    }}
-    th {{ background: var(--table-head); position: sticky; top: 0; z-index: 1; }}
-    tr:hover td {{ background: #13213f; }}
-    .hint {{ color: var(--muted); font-size: 12px; }}
-    #movement-canvas {{ width: 100%; height: 320px; }}
+    }
+    th { background: var(--table-head); position: sticky; top: 0; z-index: 1; }
+    tr:hover td { background: #13213f; }
+    .hint { color: var(--muted); font-size: 12px; }
+    #movement-canvas { width: 100%; height: 320px; }
+    #no-chart-data { display: none; margin-top: 8px; }
   </style>
 </head>
 <body>
   <div class="container">
     <div style="margin-bottom:8px;"><a href="/">← Back to dashboard</a></div>
-    <h1 id="title">Match #{canonical_match_id}</h1>
+    <h1 id="title">Match #__ID__</h1>
     <div id="subtitle" class="meta">Loading match details...</div>
 
     <div class="card">
+      <div class="controls">
+        <div class="control">
+          <label for="filter-source">Source</label>
+          <select id="filter-source">
+            <option value="all">All</option>
+            <option value="ps3838">ps3838</option>
+            <option value="e_stave">e_stave</option>
+          </select>
+        </div>
+        <div class="control">
+          <label for="filter-selection">Selection</label>
+          <select id="filter-selection">
+            <option value="all">All</option>
+            <option value="home">home</option>
+            <option value="draw">draw</option>
+            <option value="away">away</option>
+          </select>
+        </div>
+        <div class="control">
+          <label for="filter-from">From (local)</label>
+          <input id="filter-from" type="datetime-local" />
+        </div>
+        <div class="control">
+          <label for="filter-to">To (local)</label>
+          <input id="filter-to" type="datetime-local" />
+        </div>
+        <div class="control actions">
+          <button id="apply-filters">Apply filters</button>
+          <button id="reset-filters">Reset</button>
+        </div>
+      </div>
       <canvas id="movement-canvas"></canvas>
+      <div id="no-chart-data" class="hint">No chart data for current filters.</div>
       <div class="hint">Odds movement over time (all saved 1x2 snapshots in DB).</div>
     </div>
 
@@ -748,42 +815,65 @@ def match_details_page(canonical_match_id: int) -> str:
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
   <script>
-    const MATCH_ID = {canonical_match_id};
+    const MATCH_ID = __ID__;
     let movementChart = null;
+    let allSnapshots = [];
 
-    async function fetchJson(url) {{
+    async function fetchJson(url) {
       const res = await fetch(url);
-      if (!res.ok) throw new Error(`HTTP ${{res.status}}: ${{url}}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}: ${url}`);
       return await res.json();
-    }}
+    }
 
-    function colorFor(source, selection) {{
-      const bySource = {{
-        ps3838: {{ home: '#4ea1ff', draw: '#7eb9ff', away: '#b3d7ff' }},
-        e_stave: {{ home: '#f6a75a', draw: '#f7c485', away: '#fde0b6' }},
-      }};
+    function colorFor(source, selection) {
+      const bySource = {
+        ps3838: { home: '#4ea1ff', draw: '#7eb9ff', away: '#b3d7ff' },
+        e_stave: { home: '#f6a75a', draw: '#f7c485', away: '#fde0b6' },
+      };
       return (bySource[source] && bySource[source][selection]) || '#c8d2e2';
-    }}
+    }
 
-    function formatUtc(iso) {{
+    function formatUtc(iso) {
       if (!iso) return '-';
       const d = new Date(iso);
       return d.toISOString().replace('T', ' ').replace('Z', '');
-    }}
+    }
 
-    function renderChart(snapshots) {{
+    function parseFilterDate(value) {
+      if (!value) return null;
+      const d = new Date(value);
+      return Number.isNaN(d.getTime()) ? null : d.getTime();
+    }
+
+    function filteredSnapshots() {
+      const source = document.getElementById('filter-source').value;
+      const selection = document.getElementById('filter-selection').value;
+      const fromTs = parseFilterDate(document.getElementById('filter-from').value);
+      const toTs = parseFilterDate(document.getElementById('filter-to').value);
+
+      return allSnapshots.filter((snap) => {
+        if (source !== 'all' && snap.source !== source) return false;
+        if (selection !== 'all' && snap.selection !== selection) return false;
+        const ts = new Date(snap.scraped_at).getTime();
+        if (fromTs !== null && ts < fromTs) return false;
+        if (toTs !== null && ts > toTs) return false;
+        return true;
+      });
+    }
+
+    function renderChart(snapshots) {
       const groups = new Map();
-      for (const snap of snapshots) {{
-        const key = `${{snap.source}}:${{snap.selection}}`;
+      for (const snap of snapshots) {
+        const key = `${snap.source}:${snap.selection}`;
         if (!groups.has(key)) groups.set(key, []);
-        groups.get(key).push({{ x: snap.scraped_at, y: Number(snap.odds_decimal), source: snap.source, selection: snap.selection }});
-      }}
+        groups.get(key).push({ x: snap.scraped_at, y: Number(snap.odds_decimal), source: snap.source, selection: snap.selection });
+      }
 
       const datasets = [];
-      for (const [key, points] of groups.entries()) {{
+      for (const [key, points] of groups.entries()) {
         const [source, selection] = key.split(':');
-        datasets.push({{
-          label: `${{source}} ${{selection}}`,
+        datasets.push({
+          label: `${source} ${selection}`,
           data: points,
           borderColor: colorFor(source, selection),
           backgroundColor: colorFor(source, selection),
@@ -792,63 +882,96 @@ def match_details_page(canonical_match_id: int) -> str:
           tension: 0.15,
           spanGaps: true,
           borderDash: selection === 'draw' ? [6, 4] : [],
-        }});
-      }}
+        });
+      }
 
+      const noData = document.getElementById('no-chart-data');
       const canvas = document.getElementById('movement-canvas');
+      if (datasets.length === 0) {
+        noData.style.display = 'block';
+        canvas.style.display = 'none';
+      } else {
+        noData.style.display = 'none';
+        canvas.style.display = 'block';
+      }
+
       if (movementChart) movementChart.destroy();
-      movementChart = new Chart(canvas.getContext('2d'), {{
+      movementChart = new Chart(canvas.getContext('2d'), {
         type: 'line',
-        data: {{ datasets }},
-        options: {{
+        data: { datasets },
+        options: {
           responsive: true,
           maintainAspectRatio: false,
-          scales: {{
-            x: {{ type: 'time', ticks: {{ color: '#c6d3e8' }}, grid: {{ color: '#223450' }} }},
-            y: {{ ticks: {{ color: '#c6d3e8' }}, grid: {{ color: '#223450' }} }},
-          }},
-          plugins: {{ legend: {{ labels: {{ color: '#dce8f8' }} }} }},
-        }},
-      }});
-    }}
+          scales: {
+            x: { type: 'time', ticks: { color: '#c6d3e8' }, grid: { color: '#223450' } },
+            y: { ticks: { color: '#c6d3e8' }, grid: { color: '#223450' } },
+          },
+          plugins: { legend: { labels: { color: '#dce8f8' } } },
+        },
+      });
+    }
 
-    function renderTable(snapshots) {{
+    function renderTable(snapshots) {
       const tbody = document.querySelector('#snapshots-table tbody');
       tbody.innerHTML = '';
       const reversed = [...snapshots].reverse();
-      for (const snap of reversed) {{
+      for (const snap of reversed) {
         const tr = document.createElement('tr');
         tr.innerHTML = `
-          <td>${{formatUtc(snap.scraped_at)}}</td>
-          <td>${{snap.source}}</td>
-          <td>${{snap.market_type}}</td>
-          <td>${{snap.selection}}</td>
-          <td>${{snap.odds_decimal}}</td>
-          <td>${{snap.external_event_id}}</td>
-          <td>${{snap.league ?? '-'}}</td>
+          <td>${formatUtc(snap.scraped_at)}</td>
+          <td>${snap.source}</td>
+          <td>${snap.market_type}</td>
+          <td>${snap.selection}</td>
+          <td>${snap.odds_decimal}</td>
+          <td>${snap.external_event_id}</td>
+          <td>${snap.league ?? '-'}</td>
         `;
         tbody.appendChild(tr);
-      }}
-      document.getElementById('counts').textContent = `Saved odds rows: ${{snapshots.length}}`;
-    }}
+      }
+      document.getElementById('counts').textContent = `Showing ${snapshots.length} / ${allSnapshots.length} saved odds rows`;
+    }
 
-    async function init() {{
-      try {{
-        const payload = await fetchJson(`/matches/${{MATCH_ID}}/odds-snapshots?hours=0`);
-        document.getElementById('title').textContent = `${{payload.home_team}} vs ${{payload.away_team}}`;
-        document.getElementById('subtitle').textContent = `Match #${{payload.canonical_match_id}} | sport=${{payload.sport}} | kickoff=${{payload.kickoff_utc ?? '-'}}`;
-        renderChart(payload.snapshots);
-        renderTable(payload.snapshots);
-      }} catch (err) {{
-        document.getElementById('subtitle').textContent = `Failed loading match details: ${{err}}`;
-      }}
-    }}
+    function applyFilters() {
+      const snapshots = filteredSnapshots();
+      renderChart(snapshots);
+      renderTable(snapshots);
+    }
+
+    function resetFilters() {
+      document.getElementById('filter-source').value = 'all';
+      document.getElementById('filter-selection').value = 'all';
+      document.getElementById('filter-from').value = '';
+      document.getElementById('filter-to').value = '';
+      applyFilters();
+    }
+
+    async function init() {
+      try {
+        const payload = await fetchJson(`/matches/${MATCH_ID}/odds-snapshots?hours=0`);
+        allSnapshots = payload.snapshots ?? [];
+
+        document.getElementById('title').textContent = `${payload.home_team} vs ${payload.away_team}`;
+        document.getElementById('subtitle').textContent = `Match #${payload.canonical_match_id} | sport=${payload.sport} | kickoff=${payload.kickoff_utc ?? '-'} | all timestamps are saved in UTC`;
+
+        document.getElementById('apply-filters').addEventListener('click', applyFilters);
+        document.getElementById('reset-filters').addEventListener('click', resetFilters);
+        document.getElementById('filter-source').addEventListener('change', applyFilters);
+        document.getElementById('filter-selection').addEventListener('change', applyFilters);
+        document.getElementById('filter-from').addEventListener('change', applyFilters);
+        document.getElementById('filter-to').addEventListener('change', applyFilters);
+
+        applyFilters();
+      } catch (err) {
+        document.getElementById('subtitle').textContent = `Failed loading match details: ${err}`;
+      }
+    }
 
     init();
   </script>
 </body>
 </html>
 """
+    return html.replace("__ID__", str(canonical_match_id))
 
 
 @app.get("/health", response_model=HealthResponse)
