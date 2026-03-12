@@ -3,6 +3,7 @@ from decimal import Decimal
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
+from odds_app.constants import DEFAULT_COMPARISON_SOURCES, SOURCE_E_STAVE, SOURCE_PS3838
 from odds_app.models import CanonicalMatch, OddsSnapshot, SourceEvent
 from odds_app.schemas import (
     MatchSummaryResponse,
@@ -129,13 +130,14 @@ def _better_source(ps_odds: Decimal | None, es_odds: Decimal | None) -> str | No
     if ps_odds is None or es_odds is None:
         return None
     if ps_odds > es_odds:
-        return "ps3838"
+        return SOURCE_PS3838
     if es_odds > ps_odds:
-        return "e_stave"
+        return SOURCE_E_STAVE
     return "equal"
 
 
 def list_overlap_matches(db: Session, limit: int = 100) -> list[OverlapMatchRow]:
+    primary_source, secondary_source = DEFAULT_COMPARISON_SOURCES
     canonical_rows = list(
         db.scalars(select(CanonicalMatch).order_by(desc(CanonicalMatch.updated_at)).limit(limit * 8))
     )
@@ -146,7 +148,7 @@ def list_overlap_matches(db: Session, limit: int = 100) -> list[OverlapMatchRow]
             db.scalars(
                 select(SourceEvent)
                 .where(SourceEvent.canonical_match_id == canonical.id)
-                .where(SourceEvent.source.in_(["ps3838", "e_stave"]))
+                .where(SourceEvent.source.in_(list(DEFAULT_COMPARISON_SOURCES)))
             )
         )
         by_source: dict[str, SourceEvent] = {}
@@ -155,13 +157,13 @@ def list_overlap_matches(db: Session, limit: int = 100) -> list[OverlapMatchRow]
             if not existing or event.last_seen_at > existing.last_seen_at:
                 by_source[event.source] = event
 
-        ps_event = by_source.get("ps3838")
-        es_event = by_source.get("e_stave")
+        ps_event = by_source.get(primary_source)
+        es_event = by_source.get(secondary_source)
         if not (ps_event and es_event):
             continue
 
-        ps_odds, _ = _latest_1x2_odds(db, "ps3838", ps_event.external_event_id)
-        es_odds, _ = _latest_1x2_odds(db, "e_stave", es_event.external_event_id)
+        ps_odds, _ = _latest_1x2_odds(db, primary_source, ps_event.external_event_id)
+        es_odds, _ = _latest_1x2_odds(db, secondary_source, es_event.external_event_id)
         output.append(
             OverlapMatchRow(
                 canonical_match_id=canonical.id,

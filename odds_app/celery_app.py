@@ -17,8 +17,8 @@ celery.conf.update(
             "task": "odds_app.tasks.scrape_estave_soccer",
             "schedule": float(settings.scrape_interval_sec),
         },
-        "run-value-comparison-every-5-min": {
-            "task": "odds_app.tasks.compare_value_edges",
+        "run-reconciliation-and-comparison-every-5-min": {
+            "task": "odds_app.tasks.reconcile_and_compare_matches",
             "schedule": float(settings.compare_interval_sec),
         },
         "dispatch-alerts": {

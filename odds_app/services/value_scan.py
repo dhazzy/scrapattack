@@ -5,6 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from odds_app.config import get_settings
+from odds_app.constants import DEFAULT_COMPARISON_SOURCES
 from odds_app.models import Alert, CanonicalMatch, OddsSnapshot, SourceEvent
 
 
@@ -36,6 +37,7 @@ def _recent_value_alert_exists(
 
 def scan_value_edges(db: Session) -> int:
     settings = get_settings()
+    primary_source, secondary_source = DEFAULT_COMPARISON_SOURCES
     since = datetime.now(timezone.utc) - timedelta(minutes=90)
 
     source_events = list(db.scalars(select(SourceEvent)))
@@ -45,7 +47,7 @@ def scan_value_edges(db: Session) -> int:
 
     stmt = (
         select(OddsSnapshot)
-        .where(OddsSnapshot.source.in_(["ps3838", "e_stave"]))
+        .where(OddsSnapshot.source.in_(list(DEFAULT_COMPARISON_SOURCES)))
         .where(OddsSnapshot.scraped_at >= since)
         .order_by(OddsSnapshot.scraped_at.desc())
     )
@@ -63,12 +65,12 @@ def scan_value_edges(db: Session) -> int:
 
     created_alerts = 0
     for (canonical_match_id, market_type, selection), src_map in latest.items():
-        ps = src_map.get("ps3838")
-        es = src_map.get("e_stave")
-        if not (ps and es):
+        primary = src_map.get(primary_source)
+        secondary = src_map.get(secondary_source)
+        if not (primary and secondary):
             continue
 
-        edge_pct = _edge_pct(ps.odds_decimal, es.odds_decimal)
+        edge_pct = _edge_pct(primary.odds_decimal, secondary.odds_decimal)
         if edge_pct < settings.value_edge_threshold_pct:
             continue
         if _recent_value_alert_exists(
@@ -77,13 +79,14 @@ def scan_value_edges(db: Session) -> int:
             continue
 
         canonical = db.get(CanonicalMatch, canonical_match_id)
-        home = canonical.display_home_team if canonical else ps.home_team
-        away = canonical.display_away_team if canonical else ps.away_team
-        sport = canonical.sport if canonical else ps.sport
+        home = canonical.display_home_team if canonical else primary.home_team
+        away = canonical.display_away_team if canonical else primary.away_team
+        sport = canonical.sport if canonical else primary.sport
 
         msg = (
             f"[VALUE EDGE] {home} vs {away} | {market_type}:{selection} "
-            f"ps3838={ps.odds_decimal} vs e-stave={es.odds_decimal} (edge {edge_pct:.2f}%)"
+            f"{primary_source}={primary.odds_decimal} vs {secondary_source}={secondary.odds_decimal} "
+            f"(edge {edge_pct:.2f}%)"
         )
         alert = Alert(
             alert_type="value_edge",
@@ -93,15 +96,21 @@ def scan_value_edges(db: Session) -> int:
             selection=selection,
             home_team=home,
             away_team=away,
-            kickoff_utc=ps.kickoff_utc,
+            kickoff_utc=primary.kickoff_utc,
             message=msg,
             details={
                 "canonical_match_id": canonical_match_id,
-                "ps3838_odds": str(ps.odds_decimal),
-                "e_stave_odds": str(es.odds_decimal),
+                "primary_source": primary_source,
+                "secondary_source": secondary_source,
+                "primary_odds": str(primary.odds_decimal),
+                "secondary_odds": str(secondary.odds_decimal),
                 "edge_pct": round(edge_pct, 4),
-                "ps3838_event_id": ps.external_event_id,
-                "e_stave_event_id": es.external_event_id,
+                "primary_event_id": primary.external_event_id,
+                "secondary_event_id": secondary.external_event_id,
+                f"{primary_source}_odds": str(primary.odds_decimal),
+                f"{secondary_source}_odds": str(secondary.odds_decimal),
+                f"{primary_source}_event_id": primary.external_event_id,
+                f"{secondary_source}_event_id": secondary.external_event_id,
             },
         )
         db.add(alert)

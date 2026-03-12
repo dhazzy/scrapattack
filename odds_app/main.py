@@ -7,10 +7,12 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from odds_app.config import get_settings
+from odds_app.constants import DEFAULT_COMPARISON_SOURCES
 from odds_app.db import Base, engine, get_db, ping_db
 from odds_app.models import Alert, CanonicalMatch, OddsSnapshot, SourceEvent
 from odds_app.schemas import (
     AlertResponse,
+    ForceCompareResponse,
     HealthResponse,
     MatchSummaryResponse,
     OddsSnapshotResponse,
@@ -19,6 +21,7 @@ from odds_app.schemas import (
     RunOnceResponse,
     SourceMatchRow,
 )
+from odds_app.services.comparison import run_match_comparison_cycle
 from odds_app.services.diagnostics import run_ps3838_diagnostics_sync, run_vodds_diagnostics_sync
 from odds_app.services.match_views import list_overlap_matches, list_recent_matches, list_source_matches
 from odds_app.services.orchestrator import run_pipeline_once
@@ -165,6 +168,40 @@ def dashboard() -> str:
     .positive { color: var(--success); font-weight: 700; }
     .negative { color: var(--danger); font-weight: 700; }
     .muted { color: var(--muted); }
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.6);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+      padding: 16px;
+    }
+    .modal-backdrop.show { display: flex; }
+    .modal {
+      width: min(520px, 100%);
+      background: linear-gradient(180deg, #15233f, #0f182a);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+    }
+    .modal p { color: #d3deee; margin: 0 0 10px; font-size: 14px; }
+    .modal .hint { color: var(--muted); font-size: 12px; }
+    .modal input {
+      width: 100%;
+      margin: 8px 0 12px;
+      padding: 10px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: #0b1220;
+      color: #eef3fb;
+    }
+    .modal-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+    }
   </style>
 </head>
 <body>
@@ -191,7 +228,8 @@ def dashboard() -> str:
 
   <div class="actions">
     <button onclick="forceRefresh()">Force refresh now</button>
-    <button class="danger" onclick="clearDatabase()">Clear whole DB</button>
+    <button onclick="forceCompare()">Force compare now</button>
+    <button class="danger" onclick="openClearDbModal()">Clear whole DB</button>
     <span id="run-status" class="status"></span>
   </div>
 
@@ -246,6 +284,18 @@ def dashboard() -> str:
       </thead>
       <tbody></tbody>
     </table>
+  </div>
+</div>
+<div id="clear-db-modal" class="modal-backdrop" aria-hidden="true">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="clear-db-title">
+    <h3 id="clear-db-title">Clear whole DB?</h3>
+    <p>This will permanently delete odds snapshots, alerts, source events, and canonical matches.</p>
+    <p class="hint">Type <strong>CLEAR DB</strong> to enable deletion.</p>
+    <input id="clear-db-confirm-input" type="text" autocomplete="off" placeholder="Type: CLEAR DB" oninput="onClearDbInput()" />
+    <div class="modal-actions">
+      <button onclick="closeClearDbModal()">Cancel</button>
+      <button id="clear-db-confirm-btn" class="danger" onclick="confirmClearDatabase()" disabled>Delete everything</button>
+    </div>
   </div>
 </div>
 
@@ -384,10 +434,42 @@ def dashboard() -> str:
     }
   }
 
-  async function clearDatabase() {
+  async function forceCompare() {
     const status = document.getElementById('run-status');
-    const ok = confirm('This will delete all odds, alerts, and match mappings. Continue?');
-    if (!ok) return;
+    status.textContent = 'Reconciling and comparing matches...';
+    try {
+      const out = await fetchJson('/admin/force-compare', { method: 'POST' });
+      status.textContent = `Compare done: reconciled=${out.reconciled_events}, overlaps=${out.overlap_matches}, value_alerts=${out.value_edge_alerts}`;
+      await refresh();
+    } catch (err) {
+      status.textContent = `Force compare failed: ${err}`;
+    }
+  }
+
+  function openClearDbModal() {
+    const modal = document.getElementById('clear-db-modal');
+    const input = document.getElementById('clear-db-confirm-input');
+    document.getElementById('clear-db-confirm-btn').disabled = true;
+    input.value = '';
+    modal.classList.add('show');
+    modal.setAttribute('aria-hidden', 'false');
+    setTimeout(() => input.focus(), 30);
+  }
+
+  function closeClearDbModal() {
+    const modal = document.getElementById('clear-db-modal');
+    modal.classList.remove('show');
+    modal.setAttribute('aria-hidden', 'true');
+  }
+
+  function onClearDbInput() {
+    const input = document.getElementById('clear-db-confirm-input').value.trim().toUpperCase();
+    document.getElementById('clear-db-confirm-btn').disabled = input !== 'CLEAR DB';
+  }
+
+  async function confirmClearDatabase() {
+    const status = document.getElementById('run-status');
+    closeClearDbModal();
     status.textContent = 'Clearing database...';
     try {
       const out = await fetchJson('/admin/clear-db', { method: 'POST' });
@@ -397,6 +479,12 @@ def dashboard() -> str:
       status.textContent = `Clear DB failed: ${err}`;
     }
   }
+
+  document.getElementById('clear-db-modal').addEventListener('click', (event) => {
+    if (event.target.id === 'clear-db-modal') {
+      closeClearDbModal();
+    }
+  });
 
   refresh();
   setInterval(refresh, 30000);
@@ -438,8 +526,9 @@ def recent_matches(limit: int = 50, db: Session = Depends(get_db)) -> list[Match
 def matches_by_source(
     source: str, limit: int = 100, db: Session = Depends(get_db)
 ) -> list[SourceMatchRow]:
-    if source not in {"ps3838", "e_stave"}:
-        raise HTTPException(status_code=400, detail="source must be ps3838 or e_stave")
+    if source not in set(DEFAULT_COMPARISON_SOURCES):
+        allowed = ", ".join(DEFAULT_COMPARISON_SOURCES)
+        raise HTTPException(status_code=400, detail=f"source must be one of: {allowed}")
     return list_source_matches(db, source=source, limit=limit)
 
 
@@ -451,6 +540,11 @@ def overlap_matches(limit: int = 100, db: Session = Depends(get_db)) -> list[Ove
 @app.post("/admin/force-refresh", response_model=RunOnceResponse)
 def admin_force_refresh(db: Session = Depends(get_db)) -> dict:
     return run_pipeline_once(db, simulate_drop=False)
+
+
+@app.post("/admin/force-compare", response_model=ForceCompareResponse)
+def admin_force_compare(db: Session = Depends(get_db)) -> dict:
+    return run_match_comparison_cycle(db, overlap_limit=300)
 
 
 @app.get("/admin/next-scrape")

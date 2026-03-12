@@ -19,6 +19,12 @@ class RunOnceResponse(BaseModel):
     total_alerts_created: int
 
 
+class ForceCompareResponse(BaseModel):
+    reconciled_events: int
+    overlap_matches: int
+    value_edge_alerts: int
+
+
 class AlertResponse(BaseModel):
     id: int
     alert_type: str

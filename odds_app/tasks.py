@@ -6,6 +6,7 @@ from odds_app.db import SessionLocal
 from odds_app.scrapers.estave import EStaveScraper
 from odds_app.scrapers.ps3838 import PS3838Scraper
 from odds_app.services.alerts import TelegramNotifier, list_unsent_alerts, mark_alert_sent
+from odds_app.services.comparison import run_match_comparison_cycle
 from odds_app.services.ingest import persist_quotes_and_detect_drops
 from odds_app.services.orchestrator import run_pipeline_once
 from odds_app.services.value_scan import scan_value_edges
@@ -41,6 +42,14 @@ def compare_value_edges() -> dict:
         alerts = scan_value_edges(db)
     result = {"alerts_created": alerts}
     logger.info("Value comparison result: %s", result)
+    return result
+
+
+@celery.task(name="odds_app.tasks.reconcile_and_compare_matches")
+def reconcile_and_compare_matches() -> dict:
+    with SessionLocal() as db:
+        result = run_match_comparison_cycle(db)
+    logger.info("Reconcile+compare result: %s", result)
     return result
 
 
