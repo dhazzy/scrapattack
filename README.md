@@ -44,12 +44,14 @@ curl -X POST http://localhost:8000/admin/force-refresh
 ```
 
 UI:
-- Open `/admin` and click **Force refresh now**
+- Open `/admin` for controls, probes, canary, and diagnostics
+- Open `/markets` for match/edge/alert tables and chart drill-down
 
 ## Main API endpoints
 
 - `GET /` landing page (links to admin)
-- `GET /admin` admin dashboard UI
+- `GET /admin` admin control center (operations, probes, canary, runtime controls)
+- `GET /markets` markets + overlap + alerts tables UI
 - `GET /health`
 - `GET /health/db`
 - `GET /alerts/recent?limit=50`
