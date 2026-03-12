@@ -56,6 +56,8 @@ class Settings(BaseSettings):
     estave_max_no_new_pages_per_query: int = Field(
         default=3, alias="ESTAVE_MAX_NO_NEW_PAGES_PER_QUERY"
     )
+    estave_extra_b_values: str = Field(default="", alias="ESTAVE_EXTRA_B_VALUES")
+    estave_g_values: str = Field(default="25", alias="ESTAVE_G_VALUES")
 
     scraper_request_timeout_sec: float = Field(default=30.0, alias="SCRAPER_REQUEST_TIMEOUT_SEC")
     scraper_enable_playwright: bool = Field(default=True, alias="SCRAPER_ENABLE_PLAYWRIGHT")

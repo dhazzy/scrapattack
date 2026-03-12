@@ -28,6 +28,28 @@ class EStaveScraper:
     def __init__(self) -> None:
         self.settings = get_settings()
 
+    def _parse_int_csv(self, value: str, default: list[int]) -> list[int]:
+        if not value.strip():
+            return default
+        out: list[int] = []
+        for part in value.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            try:
+                out.append(int(part))
+            except ValueError:
+                continue
+        return out or default
+
+    def _estave_g_values(self) -> list[int]:
+        return sorted(set(self._parse_int_csv(self.settings.estave_g_values, [25])))
+
+    def _b_values_for_request(self, request: dict[str, Any]) -> list[int]:
+        extra = self._parse_int_csv(self.settings.estave_extra_b_values, [])
+        base = [int(v) for v in request.get("b_values", [])]
+        return sorted(set(base + extra))
+
     async def scrape_soccer(self) -> list[OddsQuote]:
         mobile_task = self._scrape_mobile_service_quotes()
         website_task = extract_live_quotes(
@@ -138,97 +160,101 @@ class EStaveScraper:
                 "appSig": "",
                 "appKey": "mobileestave",
                 "a": 3,
-                "g": 25,
                 "i": "false",
                 "l": "",
                 "n": self.settings.estave_page_size,
             }
 
+            g_values = self._estave_g_values()
             quotes: list[OddsQuote] = []
             seen: set[tuple[str, str, str, str]] = set()
+
             for request in SPORT_REQUESTS:
-                for b_value in request["b_values"]:
-                    empty_pages_in_row = 0
-                    repeat_pages_in_row = 0
-                    no_new_pages_in_row = 0
-                    last_signature: str | None = None
-
-                    for page in range(self.settings.estave_max_pages_per_query):
-                        params = {
-                            **common,
-                            "b": b_value,
-                            "f": request["f"],
-                            "d": page,
-                        }
-                        resp = await client.get(service_endpoint, headers=headers, params=params)
-                        if resp.status_code >= 400:
-                            break
-
-                        payload = resp.json()
-                        data = payload.get("data") if isinstance(payload, dict) else None
-                        events = data.get("bb") if isinstance(data, dict) else None
-                        if not isinstance(events, list) or not events:
-                            empty_pages_in_row += 1
-                            if (
-                                empty_pages_in_row
-                                >= self.settings.estave_max_empty_pages_per_query
-                            ):
-                                break
-                            continue
+                b_values = self._b_values_for_request(request)
+                for g_value in g_values:
+                    for b_value in b_values:
                         empty_pages_in_row = 0
+                        repeat_pages_in_row = 0
+                        no_new_pages_in_row = 0
+                        last_signature: str | None = None
 
-                        page_quotes = self._quotes_from_events(events, request["sport"], now)
-                        if not page_quotes:
-                            no_new_pages_in_row += 1
-                            if (
-                                no_new_pages_in_row
-                                >= self.settings.estave_max_no_new_pages_per_query
-                            ):
+                        for page in range(self.settings.estave_max_pages_per_query):
+                            params = {
+                                **common,
+                                "g": g_value,
+                                "b": b_value,
+                                "f": request["f"],
+                                "d": page,
+                            }
+                            resp = await client.get(service_endpoint, headers=headers, params=params)
+                            if resp.status_code >= 400:
                                 break
-                            continue
 
-                        page_signature = "|".join(
-                            sorted(
-                                {
-                                    f"{q.external_event_id}:{q.market_type}:{q.selection}"
-                                    for q in page_quotes
-                                }
-                            )
-                        )
-                        if page_signature == last_signature:
-                            repeat_pages_in_row += 1
-                            if (
-                                repeat_pages_in_row
-                                >= self.settings.estave_max_repeat_pages_per_query
-                            ):
-                                break
-                        else:
-                            repeat_pages_in_row = 0
-                        last_signature = page_signature
-
-                        new_count = 0
-                        for quote in page_quotes:
-                            key = (
-                                quote.sport,
-                                quote.external_event_id,
-                                quote.market_type,
-                                quote.selection,
-                            )
-                            if key in seen:
+                            payload = resp.json()
+                            data = payload.get("data") if isinstance(payload, dict) else None
+                            events = data.get("bb") if isinstance(data, dict) else None
+                            if not isinstance(events, list) or not events:
+                                empty_pages_in_row += 1
+                                if (
+                                    empty_pages_in_row
+                                    >= self.settings.estave_max_empty_pages_per_query
+                                ):
+                                    break
                                 continue
-                            seen.add(key)
-                            quotes.append(quote)
-                            new_count += 1
+                            empty_pages_in_row = 0
 
-                        if new_count == 0:
-                            no_new_pages_in_row += 1
-                            if (
-                                no_new_pages_in_row
-                                >= self.settings.estave_max_no_new_pages_per_query
-                            ):
-                                break
-                        else:
-                            no_new_pages_in_row = 0
+                            page_quotes = self._quotes_from_events(events, request["sport"], now)
+                            if not page_quotes:
+                                no_new_pages_in_row += 1
+                                if (
+                                    no_new_pages_in_row
+                                    >= self.settings.estave_max_no_new_pages_per_query
+                                ):
+                                    break
+                                continue
+
+                            page_signature = "|".join(
+                                sorted(
+                                    {
+                                        f"{q.external_event_id}:{q.market_type}:{q.selection}"
+                                        for q in page_quotes
+                                    }
+                                )
+                            )
+                            if page_signature == last_signature:
+                                repeat_pages_in_row += 1
+                                if (
+                                    repeat_pages_in_row
+                                    >= self.settings.estave_max_repeat_pages_per_query
+                                ):
+                                    break
+                            else:
+                                repeat_pages_in_row = 0
+                            last_signature = page_signature
+
+                            new_count = 0
+                            for quote in page_quotes:
+                                key = (
+                                    quote.sport,
+                                    quote.external_event_id,
+                                    quote.market_type,
+                                    quote.selection,
+                                )
+                                if key in seen:
+                                    continue
+                                seen.add(key)
+                                quotes.append(quote)
+                                new_count += 1
+
+                            if new_count == 0:
+                                no_new_pages_in_row += 1
+                                if (
+                                    no_new_pages_in_row
+                                    >= self.settings.estave_max_no_new_pages_per_query
+                                ):
+                                    break
+                            else:
+                                no_new_pages_in_row = 0
 
             return quotes
 
