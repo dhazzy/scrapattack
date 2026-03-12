@@ -16,6 +16,7 @@ from odds_app.schemas import (
     HealthResponse,
     MatchSummaryResponse,
     MatchOddsHistoryResponse,
+    MatchOddsSnapshotsResponse,
     OddsSnapshotResponse,
     OverlapMatchRow,
     PS3838DiagnosticsOverrides,
@@ -24,6 +25,7 @@ from odds_app.schemas import (
 )
 from odds_app.services.comparison import (
     get_match_odds_history,
+    get_match_odds_snapshots,
     get_overlap_home_trends,
     run_match_comparison_cycle,
 )
@@ -384,7 +386,7 @@ def dashboard() -> str:
       const tr = document.createElement('tr');
       tr.innerHTML = `
         <td>${row.sport ?? '-'}</td>
-        <td>${row.canonical_match_id}</td>
+        <td><a href="/matches/${row.canonical_match_id}/details" target="_blank">${row.canonical_match_id}</a></td>
         <td>${row.external_event_id}</td>
         <td>${row.home_team} vs ${row.away_team}</td>
         <td>${row.league ?? '-'}</td>
@@ -439,7 +441,7 @@ def dashboard() -> str:
       const tr = document.createElement('tr');
       tr.innerHTML = `
         <td>${row.sport ?? '-'}</td>
-        <td>${row.canonical_match_id}</td>
+        <td><a href="/matches/${row.canonical_match_id}/details" target="_blank">${row.canonical_match_id}</a></td>
         <td>${row.home_team} vs ${row.away_team}</td>
         <td>${row.ps3838_home_odds ?? '-'}</td>
         <td>${row.ps3838_draw_odds ?? '-'}</td>
@@ -659,6 +661,196 @@ def dashboard() -> str:
 """
 
 
+@app.get("/matches/{canonical_match_id}/details", response_class=HTMLResponse)
+def match_details_page(canonical_match_id: int) -> str:
+    return f"""<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Match Details #{canonical_match_id}</title>
+  <style>
+    :root {{
+      --bg: #0b1220;
+      --panel: #101a2e;
+      --panel-2: #0f1729;
+      --text: #e5edf7;
+      --muted: #9eb0c9;
+      --border: #233452;
+      --table-head: #14213b;
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      margin: 0;
+      font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      background: radial-gradient(circle at top, #12203b, var(--bg) 45%);
+      color: var(--text);
+      padding: 16px;
+    }}
+    .container {{ max-width: 1400px; margin: 0 auto; }}
+    a {{ color: #8dc0ff; text-decoration: none; }}
+    a:hover {{ text-decoration: underline; }}
+    h1 {{ margin: 0 0 6px; }}
+    .meta {{ color: var(--muted); margin-bottom: 12px; font-size: 13px; }}
+    .card {{
+      background: linear-gradient(180deg, var(--panel), var(--panel-2));
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px;
+      margin-bottom: 12px;
+    }}
+    .table-wrap {{
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: auto;
+      background: var(--panel-2);
+    }}
+    table {{ border-collapse: collapse; width: 100%; min-width: 1000px; }}
+    th, td {{
+      border-bottom: 1px solid #1f2f4d;
+      padding: 8px;
+      font-size: 12px;
+      white-space: nowrap;
+      text-align: left;
+    }}
+    th {{ background: var(--table-head); position: sticky; top: 0; z-index: 1; }}
+    tr:hover td {{ background: #13213f; }}
+    .hint {{ color: var(--muted); font-size: 12px; }}
+    #movement-canvas {{ width: 100%; height: 320px; }}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div style="margin-bottom:8px;"><a href="/">← Back to dashboard</a></div>
+    <h1 id="title">Match #{canonical_match_id}</h1>
+    <div id="subtitle" class="meta">Loading match details...</div>
+
+    <div class="card">
+      <canvas id="movement-canvas"></canvas>
+      <div class="hint">Odds movement over time (all saved 1x2 snapshots in DB).</div>
+    </div>
+
+    <div class="card">
+      <div id="counts" class="hint">Loading rows...</div>
+      <div class="table-wrap">
+        <table id="snapshots-table">
+          <thead>
+            <tr>
+              <th>Saved At (UTC)</th><th>Source</th><th>Market</th><th>Selection</th><th>Odds</th><th>External Event ID</th><th>League</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
+  <script>
+    const MATCH_ID = {canonical_match_id};
+    let movementChart = null;
+
+    async function fetchJson(url) {{
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${{res.status}}: ${{url}}`);
+      return await res.json();
+    }}
+
+    function colorFor(source, selection) {{
+      const bySource = {{
+        ps3838: {{ home: '#4ea1ff', draw: '#7eb9ff', away: '#b3d7ff' }},
+        e_stave: {{ home: '#f6a75a', draw: '#f7c485', away: '#fde0b6' }},
+      }};
+      return (bySource[source] && bySource[source][selection]) || '#c8d2e2';
+    }}
+
+    function formatUtc(iso) {{
+      if (!iso) return '-';
+      const d = new Date(iso);
+      return d.toISOString().replace('T', ' ').replace('Z', '');
+    }}
+
+    function renderChart(snapshots) {{
+      const groups = new Map();
+      for (const snap of snapshots) {{
+        const key = `${{snap.source}}:${{snap.selection}}`;
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push({{ x: snap.scraped_at, y: Number(snap.odds_decimal), source: snap.source, selection: snap.selection }});
+      }}
+
+      const datasets = [];
+      for (const [key, points] of groups.entries()) {{
+        const [source, selection] = key.split(':');
+        datasets.push({{
+          label: `${{source}} ${{selection}}`,
+          data: points,
+          borderColor: colorFor(source, selection),
+          backgroundColor: colorFor(source, selection),
+          borderWidth: 2,
+          pointRadius: 0,
+          tension: 0.15,
+          spanGaps: true,
+          borderDash: selection === 'draw' ? [6, 4] : [],
+        }});
+      }}
+
+      const canvas = document.getElementById('movement-canvas');
+      if (movementChart) movementChart.destroy();
+      movementChart = new Chart(canvas.getContext('2d'), {{
+        type: 'line',
+        data: {{ datasets }},
+        options: {{
+          responsive: true,
+          maintainAspectRatio: false,
+          scales: {{
+            x: {{ type: 'time', ticks: {{ color: '#c6d3e8' }}, grid: {{ color: '#223450' }} }},
+            y: {{ ticks: {{ color: '#c6d3e8' }}, grid: {{ color: '#223450' }} }},
+          }},
+          plugins: {{ legend: {{ labels: {{ color: '#dce8f8' }} }} }},
+        }},
+      }});
+    }}
+
+    function renderTable(snapshots) {{
+      const tbody = document.querySelector('#snapshots-table tbody');
+      tbody.innerHTML = '';
+      const reversed = [...snapshots].reverse();
+      for (const snap of reversed) {{
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${{formatUtc(snap.scraped_at)}}</td>
+          <td>${{snap.source}}</td>
+          <td>${{snap.market_type}}</td>
+          <td>${{snap.selection}}</td>
+          <td>${{snap.odds_decimal}}</td>
+          <td>${{snap.external_event_id}}</td>
+          <td>${{snap.league ?? '-'}}</td>
+        `;
+        tbody.appendChild(tr);
+      }}
+      document.getElementById('counts').textContent = `Saved odds rows: ${{snapshots.length}}`;
+    }}
+
+    async function init() {{
+      try {{
+        const payload = await fetchJson(`/matches/${{MATCH_ID}}/odds-snapshots?hours=0`);
+        document.getElementById('title').textContent = `${{payload.home_team}} vs ${{payload.away_team}}`;
+        document.getElementById('subtitle').textContent = `Match #${{payload.canonical_match_id}} | sport=${{payload.sport}} | kickoff=${{payload.kickoff_utc ?? '-'}}`;
+        renderChart(payload.snapshots);
+        renderTable(payload.snapshots);
+      }} catch (err) {{
+        document.getElementById('subtitle').textContent = `Failed loading match details: ${{err}}`;
+      }}
+    }}
+
+    init();
+  </script>
+</body>
+</html>
+"""
+
+
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     return HealthResponse(status="ok", app=settings.app_name)
@@ -718,6 +910,18 @@ def overlap_match_trends(
             max_points=max_points,
         )
     }
+
+
+@app.get("/matches/{canonical_match_id}/odds-snapshots", response_model=MatchOddsSnapshotsResponse)
+def match_odds_snapshots(
+    canonical_match_id: int,
+    hours: int = 0,
+    db: Session = Depends(get_db),
+) -> dict:
+    try:
+        return get_match_odds_snapshots(db, canonical_match_id=canonical_match_id, hours=hours)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.get("/matches/{canonical_match_id}/odds-history", response_model=MatchOddsHistoryResponse)

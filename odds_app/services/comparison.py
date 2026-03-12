@@ -145,6 +145,65 @@ def get_overlap_home_trends(
     return output
 
 
+def get_match_odds_snapshots(
+    db: Session,
+    canonical_match_id: int,
+    hours: int = 0,
+    sources: tuple[str, str] = DEFAULT_COMPARISON_SOURCES,
+) -> dict:
+    canonical = db.get(CanonicalMatch, canonical_match_id)
+    if not canonical:
+        raise ValueError("canonical match not found")
+
+    source_events = list(
+        db.scalars(
+            select(SourceEvent)
+            .where(SourceEvent.canonical_match_id == canonical_match_id)
+            .where(SourceEvent.source.in_(list(sources)))
+            .order_by(SourceEvent.last_seen_at.desc())
+        )
+    )
+
+    pairs = list({(event.source, event.external_event_id) for event in source_events})
+    snapshots: list[OddsSnapshot] = []
+    if pairs:
+        stmt = (
+            select(OddsSnapshot)
+            .where(tuple_(OddsSnapshot.source, OddsSnapshot.external_event_id).in_(pairs))
+            .where(OddsSnapshot.market_type == "1x2")
+            .where(OddsSnapshot.selection.in_(list(SELECTION_ORDER)))
+        )
+        if hours > 0:
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+            stmt = stmt.where(OddsSnapshot.scraped_at >= cutoff)
+        stmt = stmt.order_by(
+            OddsSnapshot.scraped_at.asc(),
+            OddsSnapshot.source.asc(),
+            OddsSnapshot.selection.asc(),
+        )
+        snapshots = list(db.scalars(stmt))
+
+    return {
+        "canonical_match_id": canonical.id,
+        "sport": canonical.sport,
+        "home_team": canonical.display_home_team,
+        "away_team": canonical.display_away_team,
+        "kickoff_utc": canonical.kickoff_bucket_utc,
+        "snapshots": [
+            {
+                "source": snap.source,
+                "external_event_id": snap.external_event_id,
+                "market_type": snap.market_type,
+                "selection": snap.selection,
+                "odds_decimal": Decimal(snap.odds_decimal),
+                "scraped_at": snap.scraped_at,
+                "league": snap.league,
+            }
+            for snap in snapshots
+        ],
+    }
+
+
 def get_match_odds_history(
     db: Session,
     canonical_match_id: int,

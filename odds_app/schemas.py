@@ -79,6 +79,25 @@ class MatchOddsHistoryResponse(BaseModel):
     series: list[OddsHistorySeries]
 
 
+class MatchSnapshotRow(BaseModel):
+    source: str
+    external_event_id: str
+    market_type: str
+    selection: str
+    odds_decimal: Decimal
+    scraped_at: datetime
+    league: str | None
+
+
+class MatchOddsSnapshotsResponse(BaseModel):
+    canonical_match_id: int
+    sport: str
+    home_team: str
+    away_team: str
+    kickoff_utc: datetime | None
+    snapshots: list[MatchSnapshotRow]
+
+
 class SourceEventSummary(BaseModel):
     source: str
     sport: str
